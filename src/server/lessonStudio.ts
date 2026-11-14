@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { difficultyToLevel, normalizeAgeGroup } from '../shared/gameRules';
+import { difficultyToLevel, normalizeAgeGroup, normalizeArabicText } from '../shared/gameRules';
 import {
   arabicTextSimilarity,
   buildQuestionHash,
@@ -1748,6 +1748,7 @@ ${JSON.stringify(
               });
               verdictMap = new Map(verdicts.map((v) => [v.index, v]));
             } catch (verifyErr) {
+              if (verifyErr instanceof QuotaExhaustedError || verifyErr instanceof RateLimitError) throw verifyErr;
               appendDiagnostic(db, batchId, diagnostics, {
                 batchIndex: idx,
                 message: `تعذر المدقق المستقل لهذه الدفعة فتم تطبيق التحقق الصارم المحلي بالمقتطف والصفحة: ${
@@ -1768,10 +1769,12 @@ ${JSON.stringify(
                 if (totalVerifiedCount >= requestedCount) break;
                 const cand = candidates[i];
                 const verdict = verdictMap.get(i);
-                const isSupported = verdict
-                  ? verdict.supported
-                  : Boolean(cand.sourceExcerpt.trim().length >= 4 && cand.sourcePage >= 1);
-                if (!isSupported || cand.sourceExcerpt.trim().length < 4) {
+                const pageNum = verdict?.correctedPage || cand.sourcePage;
+                const excerpt = normalizeArabicText(cand.sourceExcerpt);
+                const extracted = analysis!.pageTexts.find((p) => p.page === pageNum)?.text;
+                const isSupported = verdict?.supported ?? Boolean(extracted && excerpt.length >= 12 &&
+                  normalizeArabicText(extracted).includes(excerpt));
+                if (!isSupported || excerpt.length < 4 || pageNum < 1 || pageNum > analysis!.actualPageCount) {
                   rejectedInAttempt++;
                   continue;
                 }
@@ -1787,15 +1790,13 @@ ${JSON.stringify(
                 seenHashes.add(hash);
                 const trimmedPrompt = cand.prompt.trim();
                 keptPrompts.push(trimmedPrompt);
-                const pageNum = verdict?.correctedPage && verdict.correctedPage > 0 ? verdict.correctedPage : cand.sourcePage;
                 keptFingerprints.push(toCompactFactFingerprint(trimmedPrompt, pageNum));
                 totalVerifiedCount++;
                 totalAcceptedCount++;
                 savedInAttempt++;
 
                 const isRel = Boolean(cand.isReligious || analysis!.isReligiousContent);
-                const lowConfidence = (cand.confidenceScore ?? 0.85) < 0.78;
-                const status = isRel || lowConfidence ? 'needs_review' : 'published';
+                const status = 'needs_review';
                 const qId = `q-${crypto.randomUUID().slice(0, 8)}`;
                 newlyInsertedIds.push(qId);
 

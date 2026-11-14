@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import bcrypt from 'bcryptjs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +11,20 @@ import { createAppAndHub } from './appFactory';
 import { createDatabase } from './db';
 import { seedDatabase } from './seed';
 import type { GameSessionView } from '../shared/types';
+
+async function staffLogin(baseUrl: string, db: ReturnType<typeof createDatabase>, role: 'teacher' | 'admin') {
+  const password = randomUUID();
+  const profileId = `prof-${role}-1`;
+  db.prepare('UPDATE profiles SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 4), profileId);
+  const identifier = (db.prepare('SELECT username FROM profiles WHERE id = ?').get(profileId) as { username: string }).username;
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, password }),
+  });
+  assert.equal(response.status, 200);
+  return ((await response.json()) as { token: string }).token;
+}
 
 async function withServer(
   fn: (baseUrl: string, wsUrl: string, db: ReturnType<typeof createDatabase>) => Promise<void>
@@ -46,7 +62,7 @@ function waitForWsMessage(ws: WebSocket): Promise<{ type: string; payload: GameS
 }
 
 test('HTTP E2E: Registration, login, profile isolation, and strict RBAC enforcement', async () => {
-  await withServer(async (baseUrl) => {
+  await withServer(async (baseUrl, _wsUrl, db) => {
     // 1. Unauthenticated access to protected routes returns 401
     const unauthMe = await fetch(`${baseUrl}/api/auth/me`);
     assert.equal(unauthMe.status, 401);
@@ -102,13 +118,7 @@ test('HTTP E2E: Registration, login, profile isolation, and strict RBAC enforcem
     assert.equal(studentLessons.status, 403);
 
     // 5. Teacher creates a session -> Student cannot perform Host actions -> 403
-    const teacherLogin = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'teacher@ibntaymiyyah.org', password: '1447' }),
-    });
-    assert.equal(teacherLogin.status, 200);
-    const teacherToken = ((await teacherLogin.json()) as { token: string }).token;
+    const teacherToken = await staffLogin(baseUrl, db, 'teacher');
 
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
@@ -141,13 +151,8 @@ test('HTTP E2E: Registration, login, profile isolation, and strict RBAC enforcem
 });
 
 test('HTTP & WebSocket E2E: Live dual-screen sync, buzz lock, answer scoring, secret stripping, and reconnect', async () => {
-  await withServer(async (baseUrl, wsUrl) => {
-    const teacherLogin = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'teacher@ibntaymiyyah.org', password: '1447' }),
-    });
-    const teacherToken = ((await teacherLogin.json()) as { token: string }).token;
+  await withServer(async (baseUrl, wsUrl, db) => {
+    const teacherToken = await staffLogin(baseUrl, db, 'teacher');
 
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
@@ -237,12 +242,7 @@ test('HTTP & WebSocket E2E: Live dual-screen sync, buzz lock, answer scoring, se
 
 test('HTTP E2E: Teacher bulk import gating, approval, invalid PDF rejection, and lesson deletion cleanup', async () => {
   await withServer(async (baseUrl, _wsUrl, db) => {
-    const adminLogin = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'admin@ibntaymiyyah.org', password: '2026' }),
-    });
-    const adminToken = ((await adminLogin.json()) as { token: string }).token;
+    const adminToken = await staffLogin(baseUrl, db, 'admin');
 
     // 1. Import CSV with religious question -> must enter needs_review, not published
     const csvText = [
@@ -310,12 +310,7 @@ test('HTTP E2E: Teacher bulk import gating, approval, invalid PDF rejection, and
 
 test('HTTP & WS E2E: Continuous rapid_fire clock, post-timeout guard, buzz wrong-lockout transfer, golden target x2, overtime, availability & SSE', async () => {
   await withServer(async (baseUrl, _wsUrl, db) => {
-    const teacherLogin = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'teacher@ibntaymiyyah.org', password: '1447' }),
-    });
-    const teacherToken = ((await teacherLogin.json()) as { token: string }).token;
+    const teacherToken = await staffLogin(baseUrl, db, 'teacher');
 
     // 1. Check availability & resumable endpoints
     const availRes = await fetch(`${baseUrl}/api/questions/availability?bankId=bank-general-mosque&ageGroup=family`);
@@ -356,7 +351,9 @@ test('HTTP & WS E2E: Continuous rapid_fire clock, post-timeout guard, buzz wrong
     const created = ((await createRes.json()) as { session: GameSessionView }).session;
 
     // Resumable list exposes newly active match
-    const resumableRes = await fetch(`${baseUrl}/api/sessions/resumable`);
+    const anonymousResumable = await fetch(`${baseUrl}/api/sessions/resumable`);
+    assert.deepEqual((await anonymousResumable.json()).sessions, []);
+    const resumableRes = await fetch(`${baseUrl}/api/sessions/resumable`, { headers: { Authorization: `Bearer ${teacherToken}` } });
     const resumableJson = (await resumableRes.json()) as { sessions: Array<{ code: string }> };
     assert.ok(resumableJson.sessions.some((s) => s.code === created.code));
 
@@ -543,13 +540,8 @@ test('HTTP & WS E2E: Continuous rapid_fire clock, post-timeout guard, buzz wrong
 });
 
 test('HTTP E2E: Free Tier AI model settings RBAC, multi-category packs, and مين يزوّد (bid_challenge) full gameplay', async () => {
-  await withServer(async (baseUrl) => {
-    const teacherLogin = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'teacher@ibntaymiyyah.org', password: '1447' }),
-    });
-    const teacherToken = ((await teacherLogin.json()) as { token: string }).token;
+  await withServer(async (baseUrl, _wsUrl, db) => {
+    const teacherToken = await staffLogin(baseUrl, db, 'teacher');
 
     // 1. Protected AI model endpoint: unauth -> 401, paid model -> 400, Free Tier flash -> 200, no secrets exposed
     const unauthSettings = await fetch(`${baseUrl}/api/settings/ai-model`);
@@ -679,5 +671,79 @@ test('HTTP E2E: Free Tier AI model settings RBAC, multi-category packs, and مي
     const completed = ((await rec2.json()) as { session: GameSessionView }).session;
     assert.equal(completed.answerRevealed, true);
     assert.equal(completed.teams[1].points, 3);
+  });
+});
+
+test('phone-controlled matches keep referee actions and answers private over HTTP', async () => {
+  await withServer(async (baseUrl, _wsUrl, db) => {
+    const { issueAuthToken } = await import('./rbac');
+    const token = issueAuthToken(db, 'prof-teacher-1');
+    const post = (route: string, payload: object, auth?: string) => fetch(baseUrl + route, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth}` } : {}) },
+      body: JSON.stringify(payload),
+    });
+    const setup = {
+      settings: { hostControlled: true }, skipVs: true, roundTypes: ['multiple_choice'],
+      roundOverrides: { multiple_choice: { questionsPerRound: 1 } },
+    };
+    assert.equal((await post('/api/sessions', setup)).status, 401);
+    const created = await post('/api/sessions', setup, token);
+    assert.equal(created.status, 201);
+    const { session } = await created.json() as { session: GameSessionView };
+    assert.equal(session.phase, 'vs');
+    const route = `/api/sessions/${session.code}`;
+    assert.equal((await post(route + '/action', { action: 'start_match' })).status, 403);
+    assert.equal((await post(route + '/action', { action: 'start_match' }, token)).status, 200);
+    const audience = await (await fetch(baseUrl + route + '?role=host')).json() as { session: GameSessionView };
+    assert.equal(audience.session.hostSecret, undefined);
+    assert.equal(audience.session.currentQuestion?.revealedAcceptableAnswers, undefined);
+    assert.equal((await post(route + '/answer', { teamIndex: 0, submitted: 0 })).status, 403);
+    assert.equal((await post(route + '/action', { action: 'award_team', payload: { teamIndex: 0 } }, token)).status, 200);
+    const ended = await (await post(route + '/action', { action: 'next_question' }, token)).json() as { session: GameSessionView };
+    assert.equal(ended.session.phase, 'finished');
+    assert.equal(ended.session.teams[0].points, 1);
+  });
+});
+
+test('Game show: two team phones race for one buzzer and guests cannot act as referee', async () => {
+  await withServer(async (baseUrl, wsUrl) => {
+    const post = (url: string, body: unknown, cookie?: string) => fetch(baseUrl + url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) },
+      body: JSON.stringify(body),
+    });
+    const created = await post('/api/sessions', { roundTypes: ['buzzer'], settings: { showMode: true } });
+    assert.equal(created.status, 201);
+    const cookie = created.headers.get('set-cookie')!.split(';')[0];
+    assert.match(created.headers.get('set-cookie')!, /HttpOnly/);
+    const { session } = await created.json() as { session: GameSessionView };
+    const keys = session.hostSecret?.teamKeys;
+    assert.ok(keys?.length === 2 && keys[0] !== keys[1]);
+    const room = '/api/sessions/' + session.code;
+    const aud = new WebSocket(wsUrl + '?code=' + session.code + '&role=host'); // forged role
+    try {
+      const initial = (await waitForWsMessage(aud)).payload;
+      assert.equal(initial.hostSecret, undefined);
+      assert.equal((await post(room + '/action', { action: 'start_match' })).status, 403);
+      const started = await post(room + '/action', { action: 'start_match' }, cookie);
+      assert.equal((await started.json()).session.phase, 'round_intro');
+      const playing = (await (await post(room + '/action', { action: 'skip_intro' }, cookie)).json()).session as GameSessionView;
+      assert.equal(playing.currentQuestion?.roundType, 'buzzer');
+      const questionId = playing.currentQuestion?.id;
+      assert.equal((await post(room + '/buzz', { teamIndex: 1, teamKey: keys[0], questionId })).status, 403);
+      assert.equal((await post(room + '/buzz', { teamIndex: 0, teamKey: keys[0], questionId: 'old-slot' })).status, 409);
+      const responses = await Promise.all(keys.map((teamKey, teamIndex) => post(room + '/buzz', { teamIndex, teamKey, questionId })));
+      assert.deepEqual(responses.map((r) => r.status).sort((a,b) => a-b), [200, 409]);
+      const view = (await (await fetch(baseUrl + room + '?role=host')).json()).session as GameSessionView;
+      assert.equal(view.hostSecret, undefined);
+      assert.equal(view.currentQuestion?.revealedAcceptableAnswers, undefined);
+      assert.equal(view.buzzedTeamIndex, responses.findIndex((r) => r.status === 200));
+      const award = { action: 'award_team', payload: { teamIndex: view.buzzedTeamIndex, questionId } };
+      const [first, second] = await Promise.all([post(room + '/action', award, cookie), post(room + '/action', award, cookie)]);
+      assert.deepEqual((await first.json()).session.teams.map((t: {points: number}) => t.points),
+        (await second.json()).session.teams.map((t: {points: number}) => t.points));
+      assert.equal((await (await fetch(baseUrl + room)).json()).session.teams[view.buzzedTeamIndex!].points, 2);
+    } finally { aud.close(); }
   });
 });

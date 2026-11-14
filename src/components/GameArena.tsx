@@ -32,6 +32,9 @@ import { apiFetch, getAuthToken, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
 import { PlayerAvatar, SessionQrBadge } from './BrandEmblem';
 
+import { ShowArena } from './ShowArena';
+import { useShowCountdown, useShowSound } from './ShowPresentation';
+
 interface GameArenaProps {
   initialSession: GameSessionView;
   soundEnabled: boolean;
@@ -59,6 +62,9 @@ export function GameArena({
   const [submitting, setSubmitting] = useState(false);
   const [objectionSent, setObjectionSent] = useState(false);
   const [showTypedSprint, setShowTypedSprint] = useState(false);
+  const [showError, setShowError] = useState('');
+  const showBusy = useRef(false);
+  const [actionPending, setActionPending] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [confirmEndOpen, setConfirmEndOpen] = useState(false);
   const [showVsQr, setShowVsQr] = useState(false);
@@ -70,7 +76,9 @@ export function GameArena({
   const lastUrgentTick = useRef<number>(-1);
   const lastRoundIntroRef = useRef<number>(-1);
 
-  const { connected, reconnecting } = useSessionSocket(session.code, 'player', (next) => {
+  const countdown = useShowCountdown(session.countdownEndsAtMs);
+  useShowSound(session.settings.showMode ? session : null, countdown);
+  const { connected, reconnecting } = useSessionSocket(session.code, initialSession.hostSecret ? 'host' : 'player', (next) => {
     setSession(next);
   });
 
@@ -102,7 +110,7 @@ export function GameArena({
   // Show pre-round rule intro card once when entering round 0 if !hasShownIntro
   useEffect(() => {
     if (
-      session.phase === 'playing' &&
+      !session.settings.showMode && session.phase === 'playing' &&
       session.hasShownIntro === false &&
       lastRoundIntroRef.current !== session.currentRoundIndex
     ) {
@@ -114,7 +122,9 @@ export function GameArena({
   useEffect(() => {
     if (session.lastFeedback && session.lastFeedback.atMs !== prevFeedbackAt.current) {
       prevFeedbackAt.current = session.lastFeedback.atMs;
-      if (
+      if (session.settings.showMode && session.lastFeedback.type === 'streak') soundFx.combo();
+      else if (session.settings.showMode && session.lastFeedback.type === 'lead_change') soundFx.lead();
+      else if (
         session.lastFeedback.type === 'correct' ||
         session.lastFeedback.type === 'golden' ||
         session.lastFeedback.type === 'streak' ||
@@ -129,7 +139,7 @@ export function GameArena({
 
   useEffect(() => {
     if (
-      session.phase === 'playing' &&
+      !session.settings.showMode && session.phase === 'playing' &&
       session.timerRunning &&
       session.timerRemainingSec <= 5 &&
       session.timerRemainingSec > 0 &&
@@ -141,12 +151,13 @@ export function GameArena({
   }, [session.phase, session.timerRunning, session.timerRemainingSec]);
 
   useEffect(() => {
-    if (session.phase === 'finished') {
+    if (!session.settings.showMode && session.phase === 'finished') {
       soundFx.victory();
     }
   }, [session.phase]);
 
   useEffect(() => {
+    if (session.settings.showMode) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const inInput =
@@ -190,14 +201,21 @@ export function GameArena({
   });
 
   const sendHostAction = async (action: string, payload: Record<string, unknown> = {}) => {
+    if (session.settings.showMode && showBusy.current) return;
+    showBusy.current = true;
+    setActionPending(true);
+    setShowError('');
     try {
       const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${session.code}/action`, {
         method: 'POST',
-        body: JSON.stringify({ action, payload }),
+        body: JSON.stringify({ action, payload: { questionId: session.currentQuestion?.id, ...payload } }),
       });
       setSession(res.session);
-    } catch {
-      // Ignore transient error
+    } catch (err) {
+      if (session.settings.showMode) setShowError(err instanceof Error ? err.message : 'تعذّر تنفيذ الإجراء.');
+    } finally {
+      showBusy.current = false;
+      setActionPending(false);
     }
   };
 
@@ -211,28 +229,31 @@ export function GameArena({
     try {
       const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${session.code}/buzz`, {
         method: 'POST',
-        body: JSON.stringify({ teamIndex: teamIdx }),
+        body: JSON.stringify({ teamIndex: teamIdx, questionId: session.currentQuestion?.id }),
       });
-      setSession(res.session);
-    } catch {
-      // Ignore
+      setSession((previous) => previous.hostSecret ? { ...res.session, hostSecret: previous.hostSecret } : res.session);
+    } catch (err) {
+      if (session.settings.showMode) setShowError(err instanceof Error ? err.message : 'الجرس مش متاح.');
     }
   };
 
   const handleSubmitAnswer = async (submitted: string | number | string[]) => {
-    if (submitting || session.answerRevealed || session.timerRemainingSec <= 0) return;
+    if (submitting || showBusy.current || session.answerRevealed || session.timerRemainingSec <= 0) return;
+    showBusy.current = true;
+    setShowError('');
     setSubmitting(true);
     try {
       const teamIndex = session.buzzedTeamIndex ?? session.activeTeamIndex;
       const res = await apiFetch<{ view: GameSessionView }>(`/api/sessions/${session.code}/answer`, {
         method: 'POST',
-        body: JSON.stringify({ teamIndex, submitted }),
+        body: JSON.stringify({ teamIndex, submitted, questionId: session.currentQuestion?.id }),
       });
-      setSession(res.view);
+      setSession((previous) => previous.hostSecret ? { ...res.view, hostSecret: previous.hostSecret } : res.view);
       setTextAnswer('');
-    } catch {
-      // Ignore rejected late submit
+    } catch (err) {
+      if (session.settings.showMode) setShowError(err instanceof Error ? err.message : 'تعذّر تسجيل الإجابة.');
     } finally {
+      showBusy.current = false;
       setSubmitting(false);
     }
   };
@@ -296,6 +317,13 @@ export function GameArena({
   const useVerbalControls =
     isSprintRound && session.settings.verbalRapidFireDefault !== false && !showTypedSprint;
   const winSummary = determineWinner(session.teams);
+
+  if (session.settings.showMode) {
+    return <ShowArena session={session} audio={soundEnabled} connected={connected} canControl={Boolean(session.hostSecret)}
+      busy={actionPending || submitting} error={showError} onAction={sendHostAction} onAnswer={handleSubmitAnswer}
+      onBuzz={handleBuzz} onExit={onExit} onReplay={onPlayAgain} onSound={onToggleSound}
+      onHost={session.hostSecret && onOpenHostPanel ? () => onOpenHostPanel(session.code) : undefined} />;
+  }
 
   // ================= VS FACEOFF SCREEN =================
   if (session.phase === 'vs') {

@@ -9,7 +9,7 @@ import { MatchSetup } from './components/MatchSetup';
 import { PlayerProfile } from './components/PlayerProfile';
 import { TeamBuzzer } from './components/TeamBuzzer';
 import { TitleHub } from './components/TitleHub';
-import type { GameSessionView, ProfilePublic } from './shared/types';
+import type { GameSessionView, ProfilePublic, RoundType } from './shared/types';
 import { apiFetch, getAuthToken, setAuthToken } from './utils/api';
 import { soundFx } from './utils/sound';
 
@@ -31,6 +31,7 @@ export default function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [activeSession, setActiveSession] = useState<GameSessionView | null>(null);
   const [sessionCode, setSessionCode] = useState<string | null>(null);
+  const [setupRound, setSetupRound] = useState<RoundType | undefined>();
   const [studioLessonId, setStudioLessonId] = useState<string | null>(null);
   const [buzzerTeamIndex, setBuzzerTeamIndex] = useState<number>(0);
 
@@ -46,7 +47,10 @@ export default function App() {
         if (prev === next) return prev;
         setHistoryStack((stack) => [...stack.slice(-14), prev]);
         try {
-          window.history.pushState({ appScreen: next }, '', window.location.href);
+          const route = new URL(window.location.href);
+          route.search = '';
+          if (next !== 'buzzer') route.hash = '';
+          window.history.pushState({ appScreen: next }, '', route);
         } catch {
           // Ignore sandbox history restrictions
         }
@@ -74,6 +78,7 @@ export default function App() {
   const goHome = useCallback(() => {
     setHistoryStack([]);
     setScreen('title');
+    window.history.replaceState(window.history.state, '', window.location.pathname);
   }, []);
 
   // Sync browser/phone hardware Back button with step-by-step navigation
@@ -84,6 +89,15 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, [goBackOneStep]);
+
+  useEffect(() => {
+    if (!sessionCode || !['arena', 'host', 'projector', 'buzzer'].includes(screen)) return;
+    const url = new URL(window.location.href);
+    if (screen !== 'buzzer') url.hash = '';
+    url.search = new URLSearchParams({ mode: screen, code: sessionCode,
+      ...(screen === 'buzzer' ? { team: String(buzzerTeamIndex) } : {}) }).toString();
+    window.history.replaceState(window.history.state, '', url);
+  }, [screen, sessionCode, buzzerTeamIndex]);
 
   // Sync sound engine state
   useEffect(() => {
@@ -105,6 +119,15 @@ export default function App() {
     const code = params.get('code');
     const autostart = params.get('autostart');
 
+    if (mode === 'arena' && code) {
+      apiFetch<{ session: GameSessionView }>(`/api/sessions/${encodeURIComponent(code)}?role=host`)
+        .then(({ session }) => {
+          setActiveSession(session);
+          setSessionCode(session.code);
+          setScreen(!session.hostSecret ? 'projector' : session.settings.hostControlled ? 'host' : 'arena');
+        }).catch(() => { setScreen('title'); });
+      return;
+    }
     if (mode === 'projector' && code) {
       setSessionCode(code.toUpperCase());
       setScreen('projector');
@@ -132,7 +155,7 @@ export default function App() {
           difficulty: 'mixed',
           category: 'الكل',
           roundTypes: ['multiple_choice', 'rapid_fire', 'who_am_i', 'buzzer', 'golden'],
-          skipVs: true,
+          settings: { showMode: true, verbalRapidFireDefault: false },
         }),
       })
         .then((res) => {
@@ -145,6 +168,7 @@ export default function App() {
   }, []);
 
   const handleToggleSound = useCallback(() => {
+    soundFx.unlock();
     setSoundEnabled((prev) => !prev);
   }, []);
 
@@ -158,10 +182,10 @@ export default function App() {
     const norm = code.toUpperCase().trim();
     if (mode === 'arena') {
       try {
-        const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${norm}?role=player`);
+        const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${norm}?role=host`);
         setActiveSession(res.session);
         setSessionCode(norm);
-        navigateTo('arena');
+        navigateTo(!res.session.hostSecret ? 'projector' : res.session.settings.hostControlled ? 'host' : 'arena');
       } catch {
         setSessionCode(norm);
         navigateTo('projector');
@@ -185,6 +209,25 @@ export default function App() {
     }
   };
 
+  const handleQuickPlay = async () => {
+    const bankId = 'bank-import-thirty-seconds-v1';
+    const availability = await apiFetch<{ byRoundType: Record<string, { unseen: number }> }>(
+      '/api/questions/availability?bankId=' + bankId);
+    const choices: RoundType[] = ['multiple_choice', 'rapid_fire', 'who_am_i', 'true_false', 'fill_blank'];
+    const types = choices.filter((type) => availability.byRoundType[type]?.unseen > 0).slice(0, 3);
+    if (!types.length) throw new Error('خلصت الأسئلة الجديدة في بنك التحدي السريع. جرّب بنكًا ثانيًا من الإعداد.');
+    const roundOverrides = Object.fromEntries(types.map((type) => [type, {
+      questionsPerRound: Math.min(type === 'rapid_fire' ? 5 : 2, availability.byRoundType[type].unseen), durationSec: 30,
+    }]));
+    const { session } = await apiFetch<{ session: GameSessionView }>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'تحدي سريع', bankId, roundTypes: types, roundOverrides,
+        settings: { showMode: true, verbalRapidFireDefault: false, soundEnabled, reducedMotion },
+      }),
+    });
+    handleSessionCreated(session, 'arena');
+  };
+
   const handleOpenProjector = (code: string) => {
     window.open(`/?mode=projector&code=${encodeURIComponent(code)}`, '_blank', 'noopener,noreferrer');
   };
@@ -195,11 +238,11 @@ export default function App() {
         <TitleHub
           user={user}
           soundEnabled={soundEnabled}
-          calmMode={calmMode}
           reducedMotion={reducedMotion}
           onToggleSound={handleToggleSound}
           onToggleReducedMotion={() => setReducedMotion((p) => !p)}
-          onStartSetup={() => navigateTo('setup')}
+          onStartSetup={(type) => { setSetupRound(type); navigateTo('setup'); }}
+          onQuickPlay={handleQuickPlay}
           onOpenAuth={() => setAuthOpen(true)}
           onOpenProfile={() => navigateTo('profile')}
           onOpenLessonStudio={() => navigateTo('lesson_studio')}
@@ -210,6 +253,11 @@ export default function App() {
 
       {screen === 'setup' && (
         <MatchSetup
+          initialRound={setupRound}
+          onOpenLessonStudio={() => navigateTo('lesson_studio')}
+          onQuickPlay={handleQuickPlay}
+          soundEnabled={soundEnabled}
+          reducedMotion={reducedMotion}
           user={user}
           onBack={goBackOneStep}
           onSessionCreated={handleSessionCreated}
@@ -222,7 +270,7 @@ export default function App() {
           initialSession={activeSession}
           soundEnabled={soundEnabled}
           onToggleSound={handleToggleSound}
-          onPlayAgain={() => navigateTo('setup')}
+          onPlayAgain={() => { setSetupRound(undefined); navigateTo('setup'); }}
           onExit={goBackOneStep}
           onGoHome={goHome}
           onOpenHostPanel={(code) => {

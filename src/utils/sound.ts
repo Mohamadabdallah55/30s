@@ -35,6 +35,35 @@ class SoundEngine {
     osc.stop(now + durationSec + 0.02);
   }
 
+  unlock() {
+    const enabled = this.enabled;
+    this.enabled = true;
+    this.getContext();
+    this.enabled = enabled;
+  }
+
+  countdown(step: number) {
+    this.playTone(step === 1 ? 784 : 440, .13, 'triangle', .07);
+  }
+
+  timeUp() {
+    this.playTone(330, .18, 'triangle', .07);
+    this.playTone(247, .25, 'triangle', .06, .12);
+  }
+
+  combo() {
+    [523, 659, 784, 1047].forEach((note, index) => this.playTone(note, .14, 'triangle', .075, index * .055));
+  }
+
+  lead() {
+    this.playTone(392, .15, 'triangle', .075);
+    this.playTone(784, .2, 'triangle', .08, .1);
+  }
+
+  golden() {
+    [440, 554, 659].forEach((note, index) => this.playTone(note, .28, 'sine', .06, index * .09));
+  }
+
   correct() {
     this.playTone(523.25, 0.14, 'triangle', 0.1, 0);
     this.playTone(659.25, 0.18, 'triangle', 0.1, 0.09);

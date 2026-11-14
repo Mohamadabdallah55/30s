@@ -25,9 +25,16 @@ import type {
 } from '../shared/types';
 import { apiFetch } from '../utils/api';
 
+import { RoundArt, ShowMark, showRounds } from './ShowArt';
+
 interface MatchSetupProps {
   user: ProfilePublic | null;
   initialBankId?: string;
+  initialRound?: RoundType;
+  soundEnabled: boolean;
+  reducedMotion: boolean;
+  onQuickPlay: () => Promise<void>;
+  onOpenLessonStudio: () => void;
   initialLessonId?: string | null;
   onBack: () => void;
   onOpenAuth: () => void;
@@ -53,6 +60,7 @@ const GOLDEN_TARGETS: RoundType[] = [
 export function MatchSetup({
   user,
   initialBankId,
+  initialRound, soundEnabled, reducedMotion, onQuickPlay, onOpenLessonStudio,
   initialLessonId,
   onBack,
   onSessionCreated,
@@ -74,7 +82,7 @@ export function MatchSetup({
   const [team2Name, setTeam2Name] = useState('فريق المهاجرين');
   const [team2Color, setTeam2Color] = useState('#F59E0B');
 
-  const [selectedRounds, setSelectedRounds] = useState<RoundType[]>([
+  const [selectedRounds, setSelectedRounds] = useState<RoundType[]>(initialRound ? [initialRound] : [
     'rapid_fire',
     'multiple_choice',
     'who_am_i',
@@ -82,6 +90,8 @@ export function MatchSetup({
     'golden',
   ]);
   const [goldenTargetType, setGoldenTargetType] = useState<RoundType>('multiple_choice');
+  const [basePoints, setBasePoints] = useState<number | undefined>();
+  const [questionLimit, setQuestionLimit] = useState<number | undefined>();
   const [timerSec, setTimerSec] = useState(30);
   const [verbalRapidFireDefault, setVerbalRapidFireDefault] = useState(true);
   const [buzzerWrongRule, setBuzzerWrongRule] = useState<'pass_to_other' | 'penalty_and_pass'>('pass_to_other');
@@ -116,7 +126,7 @@ export function MatchSetup({
     const qs = new URLSearchParams({
       bankId,
       ageGroup: String(ageGroup),
-      difficulty: String(difficulty),
+      difficulty: adaptiveDifficulty ? 'mixed' : String(difficulty),
       category: selectedCategories.length === 1 ? selectedCategories[0] : 'الكل',
     });
     if (selectedCategories.length > 0) {
@@ -142,7 +152,7 @@ export function MatchSetup({
       })
       .catch(() => {});
     return () => { current = false; };
-  }, [bankId, ageGroup, difficulty, selectedCategories, user?.id, importedBank]);
+  }, [bankId, ageGroup, difficulty, adaptiveDifficulty, selectedCategories, user?.id, importedBank]);
 
   const applyPreset = (preset: MatchPreset) => {
     setActivePresetId(preset.id);
@@ -186,10 +196,24 @@ export function MatchSetup({
 
   const colorConflict = teamCount === 2 && team1Color === team2Color;
 
+  const countsRemaining = new Map<RoundType, number>();
+  const selectableRounds = ALL_ROUND_TYPES.filter((type) => {
+    if (!availability) return true;
+    return (availability.byRoundType[type === 'golden' ? goldenTargetType : type]?.unseen ?? 0) > 0;
+  });
   const previewRoundConfigs = buildDefaultRoundConfigs(selectedRounds, {
-    golden: { goldenTargetType },
-  }).map((r) => ({ ...r, durationSec: timerSec }));
+    ...Object.fromEntries(selectedRounds.map((type) => [type, { basePoints, questionsPerRound: questionLimit, ...(type === 'golden' ? { goldenTargetType } : {}) }])),
+  }).map((round) => {
+    const type = round.goldenTargetType ?? round.roundType;
+    const requested = round.questionsPerRound;
+    const available = countsRemaining.get(type) ?? availability?.byRoundType[type]?.unseen ?? requested;
+    const limit = Math.min(available, requested);
+    countsRemaining.set(type, available - limit);
+    return { ...round, durationSec: timerSec, questionsPerRound: limit };
+  });
   const matchEstimate = estimateMatchStats(previewRoundConfigs);
+  const reducedCount = previewRoundConfigs.some((round) => round.questionsPerRound < (questionLimit ?? ROUND_RULES[round.roundType].questionsPerRound));
+  const unavailableRound = previewRoundConfigs.find((round) => round.questionsPerRound === 0);
 
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -197,8 +221,8 @@ export function MatchSetup({
       onOpenAuth();
       return;
     }
-    if ((importedBank && !availability) || !selectedRounds.length) {
-      setError('اختر جولة فيها أسئلة متاحة.');
+    if (!availability || !selectedRounds.length || unavailableRound) {
+      setError(unavailableRound ? `ما ضلّ أسئلة جديدة لـ «${unavailableRound.titleAr}» مع هالاختيار. غيّر الجولة أو قلّل العدد.` : 'اختار جولة فيها أسئلة متاحة.');
       return;
     }
     if (colorConflict) {
@@ -231,6 +255,8 @@ export function MatchSetup({
       for (const rt of selectedRounds) {
         roundOverrides[rt] = {
           durationSec: timerSec,
+          basePoints,
+          questionsPerRound: questionLimit,
           ...(rt === 'golden' ? { goldenTargetType } : {}),
         };
       }
@@ -249,6 +275,8 @@ export function MatchSetup({
           roundTypes: selectedRounds,
           roundOverrides,
           settings: {
+            showMode: true,
+            soundEnabled, reducedMotion,
             hostControlled: launchMode === 'host_and_projector',
             defaultTimerSec: timerSec,
             verbalRapidFireDefault,
@@ -267,22 +295,25 @@ export function MatchSetup({
   };
 
   return (
-    <div className="min-h-screen bg-[#09143A] text-slate-50 p-4 sm:p-8">
+    <div className="show-setup min-h-screen text-slate-50 p-4 sm:p-8">
       <form onSubmit={handleStart} className="max-w-6xl mx-auto space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-white/10 text-sm font-bold whitespace-nowrap shrink-0"
-          >
-            <ArrowRight className="w-4 h-4" />
-            <span>العودة</span>
-          </button>
-          <div className="text-left">
-            <h1 className="text-xl sm:text-2xl font-black text-white">إعداد مباراة تحدي الـ30 ثانية</h1>
-            <p className="text-xs text-slate-400">اختر قالباً جاهزاً بضغطة واحدة أو خصّص الجولات والأعمار</p>
-          </div>
+        <div className="show-setup__top">
+          <button type="button" className="show-button show-button--cream" onClick={onBack}><ArrowRight size={18} /> عالصفحة الرئيسية</button>
+          <ShowMark />
         </div>
+        <div className="show-setup__hero">
+          <div><h1>جهّز التحدّي</h1><p>اختار الفرق والجولات، وخلّي الحماس يبلّش.</p></div>
+          <img src="/assets/show/stopwatch.svg" alt="" width="124" height="118" />
+        </div>
+        <nav className="show-setup__routes" aria-label="مسارات اللعب">
+          <button type="button" disabled={creating} onClick={async () => {
+            setCreating(true);
+            try { await onQuickPlay(); } catch (err) { setError(err instanceof Error ? err.message : 'تعذّر تجهيز المباراة.'); }
+            finally { setCreating(false); }
+          }}><RoundArt type="rapid_fire" /> سريع</button>
+          <a href="#custom-show"><RoundArt type="multiple_choice" /> مخصص</a>
+          <button type="button" onClick={onOpenLessonStudio}><RoundArt type="memory" /> تحدي الدرس</button>
+        </nav>
 
         {/* 6 One-Click Presets */}
         <section aria-label="قوالب المباريات السريعة" className="space-y-2">
@@ -323,7 +354,7 @@ export function MatchSetup({
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div id="custom-show" className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Steps 1 to 5: Teams, Age, Difficulty, Bank */}
           <div className="lg:col-span-5 space-y-5">
             {/* Step 1 & 2: Mode, Names & Distinct Colors */}
@@ -331,7 +362,7 @@ export function MatchSetup({
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-base font-extrabold text-white flex items-center gap-2">
                   <Users className="w-5 h-5 text-sky-400" />
-                  <span>1-2. الفرق والألوان</span>
+                  <span>الفرق والألوان</span>
                 </h2>
                 <div className="flex gap-1 p-1 rounded-lg bg-[#09143A]">
                   <button
@@ -507,7 +538,7 @@ export function MatchSetup({
               <div className="space-y-3">
                 <div>
                   <label htmlFor="setup-bank" className="block text-xs font-bold text-slate-300 mb-1">
-                    5. مصدر الأسئلة
+                    مصدر الأسئلة
                   </label>
                   <select
                     id="setup-bank"
@@ -600,14 +631,14 @@ export function MatchSetup({
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-base font-extrabold text-white">
-                  6. اختر الجولات ({selectedRounds.length} من {ALL_ROUND_TYPES.length} نوعاً)
+                  اختار الجولات ({selectedRounds.length} من {ALL_ROUND_TYPES.length} نوعاً)
                 </h2>
                 <button
                   type="button"
-                  onClick={() => setSelectedRounds(ALL_ROUND_TYPES)}
+                  onClick={() => setSelectedRounds(selectableRounds.filter((type) => type !== 'golden' || (availability?.byRoundType[goldenTargetType]?.unseen ?? 0) > (questionLimit ?? ROUND_RULES[goldenTargetType].questionsPerRound)))}
                   className="text-xs text-sky-300 hover:text-sky-200 font-bold"
                 >
-                  تحديد جميع الـ{ALL_ROUND_TYPES.length} جولة
+                  اختار كل الجولات المتاحة
                 </button>
               </div>
 
@@ -619,16 +650,18 @@ export function MatchSetup({
                     rt === 'golden'
                       ? availability?.byRoundType?.[goldenTargetType]
                       : availability?.byRoundType?.[rt];
-                  const countForType = importedBank ? countObj?.unseen : countObj?.total;
+                  const countForType = countObj?.unseen;
                   const isEmpty = typeof countForType === 'number' && countForType === 0;
 
                   return (
                     <button
                       key={rt}
                       type="button"
+                      aria-pressed={active}
+                      style={{ "--round-color": showRounds[rt].color } as React.CSSProperties}
                       onClick={() => toggleRound(rt)}
-                      disabled={Boolean(importedBank && (isEmpty || rt === 'golden'))}
-                      className={`p-3 rounded-xl border text-right transition-colors flex items-start justify-between gap-2 ${
+                      disabled={isEmpty && !active}
+                      className={`show-setup-round p-3 rounded-xl border text-right transition-colors flex items-start justify-between gap-2 ${
                         active
                           ? 'bg-sky-500/20 border-sky-400 text-white'
                           : isEmpty
@@ -638,7 +671,7 @@ export function MatchSetup({
                     >
                       <div className="min-w-0">
                         <div className="font-extrabold text-sm flex items-center gap-2">
-                          <span>{meta.nameAr}</span>
+                          <RoundArt type={rt} /><span>{meta.nameAr}</span>
                           {meta.multiplier > 1 && (
                             <span className="text-xs text-amber-300 font-mono">×{meta.multiplier}</span>
                           )}
@@ -689,7 +722,7 @@ export function MatchSetup({
 
             {/* Step 7: Timing, Mosque Verbal Default & Match Estimate */}
             <div className="pt-4 border-t border-white/10 space-y-4">
-              <h2 className="text-sm font-extrabold text-white">7. الوقت وخيارات المسابقة</h2>
+              <h2 className="text-sm font-extrabold text-white">الوقت والنقاط</h2>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -737,19 +770,32 @@ export function MatchSetup({
                 <span>وضع الإجابة الشفهية السريعة (أزرار المقدم: صح / تخطي / خطأ) لجولتي الرشاش وصح/خطأ</span>
               </label>
 
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs font-bold">نقاط الإجابة
+                  <select aria-label="نقاط الإجابة" value={basePoints ?? ''} onChange={(e) => setBasePoints(e.target.value ? Number(e.target.value) : undefined)}>
+                    <option value="">حسب الجولة</option>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+                <label className="text-xs font-bold">عدد الأسئلة في الجولة
+                  <select aria-label="عدد الأسئلة في الجولة" value={questionLimit ?? ''} onChange={(e) => setQuestionLimit(e.target.value ? Number(e.target.value) : undefined)}>
+                    <option value="">حسب الجولة</option>{[1, 2, 3, 4, 5, 6, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
               {/* Match Summary Box */}
               <div className="rounded-xl bg-[#09143A] border border-white/10 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
                 <div className="space-y-0.5">
                   <div className="font-extrabold text-white">ملخص التحدي المختار</div>
                   <div className="text-slate-400 tabular-nums">
-                    {selectedRounds.length} جولات · {matchEstimate.requiredQuestions} سؤال تقريباً · المدة المتوقعة نحو{' '}
+                    {selectedRounds.length} جولات · {matchEstimate.requiredQuestions} سؤال مخطط · {availability ? availability.unseenInFilter + ' سؤال جديد في التصفية' : 'جارٍ حساب المتاح'} · المدة المتوقعة نحو{' '}
                     {matchEstimate.estimatedMinutes} دقيقة
                   </div>
                 </div>
-                {availability && availability.totalPublishedInFilter < matchEstimate.requiredQuestions && (
+                {availability && (unavailableRound || reducedCount) && (
                   <span className="text-amber-300 font-bold inline-flex items-center gap-1">
                     <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>الأسئلة المتاحة أقل من العدد الكامل</span>
+                    <span>{unavailableRound ? `ما ضلّ أسئلة لـ «${unavailableRound.titleAr}»` : 'العدد اتعدّل حسب الأسئلة المتاحة'}</span>
                   </span>
                 )}
               </div>

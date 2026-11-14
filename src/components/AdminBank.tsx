@@ -330,6 +330,7 @@ export function AdminBank({ user, onBack, onOpenAuth }: AdminBankProps) {
                     </div>
                     <div className="text-sm font-bold text-white">{q.prompt}</div>
                     <div className="text-xs text-emerald-300">الإجابة: {q.acceptableAnswers.join(' · ')}</div>
+                    {q.sourceExcerpt && <p className="text-xs text-slate-300 break-all">المرجع: <bdi>{q.sourceExcerpt}</bdi></p>}
                     <div className="flex flex-wrap gap-2 pt-1">
                       {q.status !== 'published' && (
                         <button

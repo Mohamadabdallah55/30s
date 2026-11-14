@@ -39,6 +39,8 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     setStatusError(null);
   }, [session?.currentQuestion?.id, session?.buzzedTeamIndex]);
 
+  const teamKey = new URLSearchParams(window.location.hash.slice(1)).get('key');
+
   const handleBuzz = async () => {
     if (!session || buzzing) return;
     setBuzzing(true);
@@ -47,7 +49,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     try {
       const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${code}/buzz`, {
         method: 'POST',
-        body: JSON.stringify({ teamIndex }),
+        body: JSON.stringify({ teamIndex, teamKey, questionId: session?.currentQuestion?.id }),
       });
       setSession(res.session);
     } catch (err) {
@@ -64,7 +66,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     try {
       const res = await apiFetch<{ view: GameSessionView }>(`/api/sessions/${code}/answer`, {
         method: 'POST',
-        body: JSON.stringify({ teamIndex, submitted }),
+        body: JSON.stringify({ teamIndex, submitted, teamKey, questionId: session.currentQuestion?.id }),
       });
       setSession(res.view);
       setTextAnswer('');
@@ -134,7 +136,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     session.buzzedTeamIndex !== null ? session.teams[session.buzzedTeamIndex]?.name || 'فريق آخر' : '';
 
   const canBuzz =
-    (!session.settings.hostControlled || (session.timerRunning && q?.roundType === 'buzzer')) &&
+    (!(session.settings.hostControlled || session.settings.showMode) || (Boolean(teamKey) && session.timerRunning && q?.roundType === 'buzzer')) &&
     session.phase === 'playing' &&
     !session.answerRevealed &&
     session.timerRemainingSec > 0 &&
@@ -143,7 +145,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     session.buzzedTeamIndex === null;
 
   const canAnswerOnPhone =
-    !session.settings.hostControlled &&
+    (!(session.settings.hostControlled || session.settings.showMode) || Boolean(teamKey && q?.roundType === 'multiple_choice')) &&
     session.phase === 'playing' &&
     !session.answerRevealed &&
     session.timerRemainingSec > 0 &&
@@ -151,7 +153,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     (isMyBuzz || (q.roundType !== 'buzzer' && session.activeTeamIndex === teamIndex));
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#09143A] via-[#0F215E] to-[#081131] text-slate-50 flex flex-col justify-between p-4 sm:p-6">
+    <div className="show-phone min-h-screen text-slate-50 flex flex-col justify-between p-4 sm:p-6">
       {/* Compact Header */}
       <header className="max-w-md w-full mx-auto flex items-center justify-between gap-2">
         <div className="text-xs text-slate-300 flex items-center gap-2">
@@ -172,7 +174,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
 
       <main className="max-w-md w-full mx-auto flex-1 flex flex-col justify-center space-y-4 py-4">
         {/* Team Switcher (for quick phone setup) */}
-        {session.teams.length > 1 && (
+        {session.teams.length > 1 && !session.settings.showMode && (
           <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-[#101E52] border border-white/10">
             {session.teams.map((t) => (
               <button
@@ -241,8 +243,8 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
             )}
 
             {/* Bid Challenge (مين يزوّد) Phone Controls OR Giant Tactile Buzzer */}
-            {session.settings.hostControlled && q?.roundType !== 'buzzer' ? (
-              <p className="rounded-xl bg-[#101E52] p-4 text-center text-slate-200">تابع السؤال على شاشة الجمهور وأجب شفهيًا للمشرف.</p>
+            {(session.settings.hostControlled || session.settings.showMode) && q?.roundType !== 'buzzer' ? (
+              <p className="rounded-xl bg-[#101E52] p-4 text-center text-slate-200">{canAnswerOnPhone ? 'اختار إجابتك من الخيارات.' : 'تابع السؤال على شاشة الجمهور وأجب شفهيًا للمشرف.'}</p>
             ) : q?.roundType === 'bid_challenge' && session.bidState && !session.answerRevealed ? (
               <div className="rounded-2xl bg-[#09143A] border border-amber-400/35 p-4 space-y-3">
                 <div className="flex items-center justify-between text-xs">

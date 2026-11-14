@@ -412,8 +412,30 @@ export function resolveBidChallengePoints(params: {
   };
 }
 
+export function normalizeChallengeItem(text: string) {
+  return normalizeArabicText(text.normalize('NFKC'))
+    .replace(/(?:رضي الله عنه(?:ما|م)?|عليه السلام|صلي الله عليه وسلم|عليهم السلام)$/u, '')
+    .trim().replace(/^ال/u, '');
+}
+
+export function matchDistinctItems(expected: string[], attempts: string[]): string[] {
+  const canon = new Map(expected.map((item) => [normalizeChallengeItem(item), item]));
+  const accepted = new Set<string>();
+  for (const attempt of attempts) {
+    const key = normalizeChallengeItem(attempt);
+    const exact = canon.get(key);
+    if (exact && key) {
+      accepted.add(exact);
+      continue;
+    }
+    const matches = key.length >= 3 ? [...canon].filter(([id]) => id.startsWith(key + ' ')) : [];
+    if (matches.length === 1) accepted.add(matches[0][1]);
+  }
+  return [...accepted];
+}
+
 export function evaluateAnswerMatch(
-  question: Pick<QuestionRecord, 'roundType' | 'options' | 'acceptableAnswers' | 'correctIndex'>,
+  question: Pick<QuestionRecord, 'roundType' | 'options' | 'acceptableAnswers' | 'correctIndex'> & Pick<Partial<QuestionRecord>, 'memoryItems' | 'memoryRequireOrder'>,
   submitted: string | number | string[]
 ): { isCorrect: boolean; matchedCount?: number } {
   if (
@@ -461,27 +483,16 @@ export function evaluateAnswerMatch(
     return { isCorrect: allMatch };
   }
 
-  if (question.roundType === 'list_multiple') {
-    const submittedItems = Array.isArray(submitted)
-      ? submitted
-      : String(submitted)
-          .split(/[،,\n|]+/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-    const normAcceptable = question.acceptableAnswers.map(normalizeArabicText);
-    const matched = new Set<string>();
-    const seenInput = new Set<string>();
-    for (const item of submittedItems) {
-      const normItem = normalizeArabicText(item);
-      if (!normItem || seenInput.has(normItem)) continue;
-      seenInput.add(normItem);
-      for (const acc of normAcceptable) {
-        if (acc === normItem || (normItem.length >= 3 && (acc.includes(normItem) || normItem.includes(acc)))) {
-          matched.add(acc);
-        }
-      }
+  if (question.roundType === 'list_multiple' || (question.roundType === 'memory' && question.memoryItems?.length)) {
+    const expected = question.roundType === 'memory' ? question.memoryItems! : question.acceptableAnswers;
+    const submittedItems = Array.isArray(submitted) ? submitted : String(submitted).split(/[،,\n|]+/);
+    if (question.roundType === 'memory' && question.memoryRequireOrder) {
+      const correct = submittedItems.length === expected.length && expected.every((item, i) =>
+        normalizeChallengeItem(item) === normalizeChallengeItem(submittedItems[i]));
+      return { isCorrect: correct, matchedCount: correct ? expected.length : 0 };
     }
-    return { isCorrect: matched.size > 0, matchedCount: matched.size };
+    const matched = matchDistinctItems(expected, submittedItems);
+    return { isCorrect: matched.length > 0, matchedCount: matched.length };
   }
 
   // rapid_fire, fill_blank, who_am_i, memory, buzzer, golden
