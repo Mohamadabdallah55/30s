@@ -437,12 +437,14 @@ export function LessonStudio({
     }
   };
 
+  const [excludedMatchRounds, setExcludedMatchRounds] = useState<RoundType[]>([]);
   const createLessonSession = async (): Promise<GameSessionView | null> => {
     if (!selectedLesson) return null;
     const publishedRounds = Array.from(
       new Set(questions.filter((q) => q.status === 'published').map((q) => q.roundType))
     );
-    const chosenRounds: RoundType[] = publishedRounds.length > 0 ? publishedRounds : ['multiple_choice'];
+    const chosenRounds = publishedRounds.filter((type) => !excludedMatchRounds.includes(type));
+    if (!chosenRounds.length) throw new Error('اختار جولة واحدة على الأقل من الأسئلة المعتمدة.');
     const roundOverrides: Partial<Record<RoundType, Partial<RoundConfig>>> = {};
     for (const rt of chosenRounds) {
       roundOverrides[rt] = { durationSec: matchTimerSec };
@@ -464,6 +466,7 @@ export function LessonStudio({
         ],
         settings: {
           hostControlled: true,
+          showMode: true,
           defaultTimerSec: matchTimerSec,
         },
       }),
@@ -1280,6 +1283,19 @@ export function LessonStudio({
                       )}
                     </div>
 
+                    {questions.some((q) => q.status === 'published') && <fieldset className="flex flex-wrap gap-2">
+                      <legend className="text-xs font-black text-sky-200 mb-2">اختار جولات الدرس</legend>
+                      {Array.from(new Set(questions.filter((q) => q.status === 'published').map((q) => q.roundType))).map((type) => (
+                        <label key={type} className="text-xs rounded-xl bg-[#101E52] px-3 py-2 flex items-center gap-2">
+                          <input type="checkbox" checked={!excludedMatchRounds.includes(type)}
+                            onChange={() => {
+                              setPreparedSession(null);
+                              setExcludedMatchRounds((previous) => previous.includes(type) ? previous.filter((x) => x !== type) : [...previous, type]);
+                            }} />
+                          {ROUND_RULES[type].nameAr}
+                        </label>
+                      ))}
+                    </fieldset>}
                     {autoStartSec !== null ? (
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-bold text-amber-300 tabular-nums">

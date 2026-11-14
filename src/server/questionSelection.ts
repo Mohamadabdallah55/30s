@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import { FULL_BANK_ID } from './importFullBank';
 import type Database from 'better-sqlite3';
 import {
   ALL_ROUND_TYPES,
+  ROUND_RULES,
   difficultyToLevel,
   isAgeCompatible,
   levelToDifficulty,
@@ -15,6 +17,7 @@ export interface SelectionRequest {
   bankId: string;
   roundType: RoundType;
   goldenTargetType?: RoundType;
+  exactRounds?: boolean;
   ageGroup: AgeGroup;
   difficulty: Difficulty | 'mixed';
   targetDifficultyLevel?: DifficultyLevel;
@@ -42,6 +45,8 @@ interface QuestionRow {
   round_type: RoundType;
   category: string;
   age_group: AgeGroup;
+  age_bands_json?: string | null;
+  concept_id?: string | null;
   difficulty: Difficulty;
   difficulty_level: number | null;
   unsuitable_for_timed: number | null;
@@ -55,6 +60,9 @@ interface QuestionRow {
   order_criteria: string | null;
   memory_items_json: string;
   memory_reveal_seconds: number | null;
+  memory_require_order?: number;
+  bid_minimum?: number | null;
+  bid_maximum?: number | null;
   odd_reason: string | null;
   is_religious: number;
   status: 'published' | 'needs_review' | 'archived' | 'rejected';
@@ -90,6 +98,10 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
     orderCriteria: row.order_criteria ?? '',
     memoryItems: JSON.parse(row.memory_items_json || '[]'),
     memoryRevealSeconds: row.memory_reveal_seconds ?? 8,
+    memoryRequireOrder: row.memory_require_order === 1,
+    bidMinimum: row.bid_minimum,
+    bidMaximum: row.bid_maximum,
+    conceptId: row.concept_id,
     oddReason: row.odd_reason ?? '',
     isReligious: row.is_religious === 1,
     status: row.status,
@@ -103,6 +115,41 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
 function bidItemCount(row: QuestionRow): number {
   const answers = JSON.parse(row.acceptable_answers_json || '[]') as string[];
   return new Set(answers.map(normalizeArabicText).filter(Boolean)).size;
+}
+
+function fitsAge(row: QuestionRow, age: AgeGroup): boolean {
+  if (!row.age_bands_json) return isAgeCompatible(row.age_group, age);
+  try { return (JSON.parse(row.age_bands_json) as string[]).includes(normalizeAgeGroup(age)); }
+  catch { return false; }
+}
+
+function isPlayable(row: QuestionRow): boolean {
+  try {
+    const q = rowToQuestionRecord(row);
+    const strings = (items: unknown): items is string[] =>
+      Array.isArray(items) && items.every((item) => typeof item === 'string' && item.trim().length > 0);
+    if (!q.prompt?.trim() || !Object.hasOwn(ROUND_RULES, q.roundType) ||
+        ![q.options, q.acceptableAnswers, q.clues, q.memoryItems].every(strings)) return false;
+    const unique = (items: string[]) => new Set(items.map(normalizeArabicText).filter(Boolean));
+    if (q.roundType === 'list_multiple' || q.roundType === 'bid_challenge') {
+      return unique(q.acceptableAnswers).size >= (q.requiredCount ?? 3);
+    }
+    if (q.roundType === 'memory') return unique(q.memoryItems).size >= 2;
+    if (q.roundType === 'order_items') {
+      const options = unique(q.options);
+      const answers = unique(q.acceptableAnswers);
+      return options.size >= 2 && options.size === q.options.length && answers.size === q.acceptableAnswers.length &&
+        options.size === answers.size && [...answers].every((answer) => options.has(answer));
+    }
+    if (['true_false', 'multiple_choice', 'odd_one_out'].includes(q.roundType)) {
+      return q.options.length >= 2 && unique(q.options).size === q.options.length &&
+        q.correctIndex != null && Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex < q.options.length;
+    }
+    if (q.roundType === 'who_am_i' && q.clues.length < 2) return false;
+    return q.acceptableAnswers.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 const TIMED_SPRINT_ROUNDS = new Set<RoundType>(['rapid_fire', 'true_false', 'buzzer']);
@@ -158,7 +205,9 @@ export function getBankAvailability(
   }
 
   const baseMatching = allPublished.filter((q) => {
-    if (!isAgeCompatible(q.age_group, params.ageGroup)) return false;
+    if (!isPlayable(q)) return false;
+    if (TIMED_SPRINT_ROUNDS.has(q.round_type) && Number(q.unsuitable_for_timed || 0) === 1) return false;
+    if (!fitsAge(q, params.ageGroup)) return false;
     if (params.difficulty !== 'mixed' && q.difficulty !== params.difficulty) return false;
     return true;
   });
@@ -202,7 +251,10 @@ export function getBankAvailability(
       unseen: compatPool.filter((q) => !exposedSet.has(q.id)).length,
     };
   }
-  if (!params.exactRounds && byRoundType.buzzer.total === 0 && compatPool.length > 0) {
+  if (params.bankId === FULL_BANK_ID) {
+    const buzzerPool = compatPool.filter((q) => ['rapid_fire', 'fill_blank'].includes(q.round_type));
+    byRoundType.buzzer = { total: buzzerPool.length, unseen: buzzerPool.filter((q) => !exposedSet.has(q.id)).length };
+  } else if (!params.exactRounds && byRoundType.buzzer.total === 0 && compatPool.length > 0) {
     byRoundType.buzzer = {
       total: compatPool.length,
       unseen: compatPool.filter((q) => !exposedSet.has(q.id)).length,
@@ -237,14 +289,16 @@ export function selectNextQuestionTx(
     req.roundType === 'golden' && req.goldenTargetType ? req.goldenTargetType : req.roundType;
 
   const runTx = db.transaction((): SelectionResult => {
-    const allPublished = db
+    const allPublished = (db
       .prepare(
         `SELECT * FROM questions
          WHERE bank_id = ? AND status = 'published'`
       )
-      .all(req.bankId) as QuestionRow[];
+      .all(req.bankId) as QuestionRow[]).filter(isPlayable);
 
     const exposedSet = new Set<string>(req.excludeQuestionIds ?? []);
+    const usedConcepts = new Set(allPublished.filter((row) => exposedSet.has(row.id)).map((row) => row.concept_id).filter(Boolean));
+    const eligible = (q: QuestionRow) => !exposedSet.has(q.id) && (!q.concept_id || !usedConcepts.has(q.concept_id));
     if (permanentIds.length > 0) {
       const placeholders = permanentIds.map(() => '?').join(',');
       const exposedRows = db
@@ -260,7 +314,7 @@ export function selectNextQuestionTx(
 
     const availableCategorySet = new Set<string>();
     for (const q of allPublished) {
-      if (!exposedSet.has(q.id) && isAgeCompatible(q.age_group, req.ageGroup)) {
+      if (!exposedSet.has(q.id) && fitsAge(q, req.ageGroup)) {
         availableCategorySet.add(q.category);
       }
     }
@@ -270,31 +324,32 @@ export function selectNextQuestionTx(
     const disallowUntimed = TIMED_SPRINT_ROUNDS.has(effectiveRoundType);
 
     let candidates = allPublished.filter((q) => {
-      if (exposedSet.has(q.id)) return false;
-      if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
+      if (!eligible(q)) return false;
+      if (!fitsAge(q, req.ageGroup)) return false;
       if (req.difficulty !== 'mixed' && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
       if (categoryList && !categoryList.includes(q.category)) return false;
       if (disallowUntimed && Number(q.unsuitable_for_timed || 0) === 1) return false;
-      return q.round_type === effectiveRoundType;
+      return q.round_type === effectiveRoundType || (req.bankId === FULL_BANK_ID && effectiveRoundType === 'buzzer' &&
+        (q.round_type === 'rapid_fire' || q.round_type === 'fill_blank'));
     });
 
     if (
-      candidates.length === 0 &&
+      !req.exactRounds && candidates.length === 0 &&
       (req.roundType === 'golden' || effectiveRoundType === 'buzzer' || effectiveRoundType === 'rapid_fire')
     ) {
       const fallbackCompatibleTypes: RoundType[] = ['rapid_fire', 'fill_blank', 'multiple_choice', 'buzzer', 'golden'];
       candidates = allPublished.filter((q) => {
-        if (exposedSet.has(q.id)) return false;
-        if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
+        if (!eligible(q)) return false;
+        if (!fitsAge(q, req.ageGroup)) return false;
         if (req.difficulty !== 'mixed' && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
         if (categoryList && !categoryList.includes(q.category)) return false;
         if (disallowUntimed && Number(q.unsuitable_for_timed || 0) === 1) return false;
         return fallbackCompatibleTypes.includes(q.round_type);
       });
-    } else if (candidates.length === 0 && effectiveRoundType === 'bid_challenge') {
+    } else if (!req.exactRounds && candidates.length === 0 && effectiveRoundType === 'bid_challenge') {
       candidates = allPublished.filter((q) => {
-        if (exposedSet.has(q.id)) return false;
-        if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
+        if (!eligible(q)) return false;
+        if (!fitsAge(q, req.ageGroup)) return false;
         if (req.difficulty !== 'mixed' && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
         if (categoryList && !categoryList.includes(q.category)) return false;
         return q.round_type === 'list_multiple' && bidItemCount(q) >= 3;
@@ -340,6 +395,11 @@ export function selectNextQuestionTx(
 
     const chosenRow = nonSimilar[crypto.randomInt(0, nonSimilar.length)];
     const chosen = rowToQuestionRecord(chosenRow);
+    if (req.bankId === FULL_BANK_ID && effectiveRoundType === 'buzzer') {
+      chosen.roundType = 'buzzer';
+      chosen.options = [];
+      chosen.correctIndex = null;
+    }
 
     const insertExposure = db.prepare(`
       INSERT OR IGNORE INTO question_exposures (id, profile_id, question_id, bank_id, session_id)

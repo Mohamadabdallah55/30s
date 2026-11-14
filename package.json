@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/shared/gameRules.test.ts src/shared/questionSchema.test.ts src/server/nonRepetition.test.ts src/server/apiSecurity.test.ts src/server/e2eHttp.test.ts src/server/lessonBatchPipeline.test.ts src/server/lessonSpeedBenchmark.test.ts src/server/importedPhoneMatch.test.ts"
+    "test": "tsx --test src/shared/gameRules.test.ts src/shared/questionSchema.test.ts src/server/nonRepetition.test.ts src/server/apiSecurity.test.ts src/server/e2eHttp.test.ts src/server/lessonBatchPipeline.test.ts src/server/lessonSpeedBenchmark.test.ts src/server/importedPhoneMatch.test.ts src/server/gameShow.test.ts src/server/fullBank.test.ts"
   },
   "dependencies": {
     "@google/genai": "^3.3.0",

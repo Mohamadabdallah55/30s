@@ -118,6 +118,10 @@ export interface QuestionRecord {
   orderCriteria?: string;
   memoryItems: string[];
   memoryRevealSeconds?: number;
+  memoryRequireOrder?: boolean;
+  bidMinimum?: number | null;
+  bidMaximum?: number | null;
+  conceptId?: string | null;
   oddReason?: string;
   isReligious: boolean;
   status: QuestionStatus;
@@ -142,8 +146,10 @@ export interface AudienceQuestionView {
   prompt: string;
   options: string[];
   cluesCount: number;
+  requiredCount?: number;
   revealedClues: string[];
   orderCriteria?: string;
+  memoryRequireOrder?: boolean;
   memoryItems?: string[]; // Hidden once memory phase ends
   memoryPhase: 'memorize' | 'recall' | 'none';
   memoryRemainingSec: number;
@@ -182,6 +188,7 @@ export interface RoundConfig {
 
 export interface SessionSettings {
   hostControlled?: boolean;
+  showMode?: boolean;
   soundEnabled: boolean;
   calmMode: boolean; // Quiet mosque default
   reducedMotion: boolean;
@@ -227,6 +234,8 @@ export interface QuestionObjection {
 export type SessionPhase =
   | 'lobby'
   | 'vs'
+  | 'round_intro'
+  | 'countdown'
   | 'playing'
   | 'paused'
   | 'round_summary'
@@ -254,6 +263,9 @@ export interface GameSessionView {
   timerRemainingSec: number;
   timerRunning: boolean;
   timerEndsAtMs: number | null;
+  countdownEndsAtMs?: number | null;
+  listProgress?: { accepted: number; required: number };
+  sprintReveal?: { text: string; untilMs: number };
   answerRevealed: boolean;
   hasShownIntro?: boolean;
   isClutchTime?: boolean;
@@ -287,6 +299,8 @@ export interface GameSessionView {
   hostSecret?: {
     acceptableAnswers: string[];
     requiredCount?: number | null;
+    acceptedItems?: string[];
+    teamKeys?: string[];
     correctIndex?: number | null;
     explanation?: string;
     oddReason?: string;

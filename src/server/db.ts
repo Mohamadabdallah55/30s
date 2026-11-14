@@ -397,6 +397,11 @@ export function createDatabase(dbPath?: string): Database.Database {
   }
 
   ensureColumn('questions', 'required_count', 'INTEGER');
+  ensureColumn('questions', 'age_bands_json', 'TEXT');
+  ensureColumn('questions', 'concept_id', 'TEXT');
+  ensureColumn('questions', 'memory_require_order', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('questions', 'bid_minimum', 'INTEGER');
+  ensureColumn('questions', 'bid_maximum', 'INTEGER');
   return db;
 }
 

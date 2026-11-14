@@ -4,6 +4,7 @@ import {
   levelToDifficulty,
   normalizeAgeGroup,
   normalizeArabicText,
+  normalizeChallengeItem,
 } from './gameRules';
 import type { AgeGroup, Difficulty, DifficultyLevel, QuestionStatus, RoundType } from './types';
 
@@ -132,8 +133,9 @@ export function validateRoundFields(question: Pick<ImportedQuestionCandidate,
         !options.includes('صح') || !options.includes('خطا'))) return 'خيارات الصح والخطأ غير صالحة';
   }
   if (roundType === 'list_multiple' &&
-      ((requiredCount !== 3 && requiredCount !== 5) || uniqueAnswers.size < requiredCount)) {
-    return 'سؤال التعداد يحتاج 3 أو 5 عناصر مطلوبة وإجابات منفصلة كافية';
+      ((requiredCount !== 2 && requiredCount !== 3 && requiredCount !== 5) ||
+        new Set(question.acceptableAnswers.map(normalizeChallengeItem).filter(Boolean)).size < requiredCount)) {
+    return 'سؤال التعداد يحتاج عنصرين أو 3 أو 5 عناصر مطلوبة وإجابات منفصلة كافية';
   }
   if (roundType === 'bid_challenge' && uniqueAnswers.size < 3) return 'المزايدة تحتاج ثلاثة عناصر مقبولة على الأقل';
   if (roundType === 'who_am_i' && new Set(question.clues?.map(normalizeArabicText).filter(Boolean)).size < 3) {

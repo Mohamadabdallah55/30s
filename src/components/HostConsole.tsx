@@ -25,6 +25,9 @@ import type { GameSessionView } from '../shared/types';
 import { apiFetch, getAuthToken, useSessionSocket } from '../utils/api';
 import { SessionQrBadge } from './BrandEmblem';
 
+import { RoundArt, ShowMark } from './ShowArt';
+import { ScoreRibbon, ShowIntermission, useShowCountdown } from './ShowPresentation';
+
 interface HostConsoleProps {
   code: string;
   onBack: () => void;
@@ -44,6 +47,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
   const [busy, setBusy] = useState(false);
   const [qrMode, setQrMode] = useState<'host' | 'projector'>('host');
 
+  const countdown = useShowCountdown(session?.countdownEndsAtMs);
   const { connected, reconnecting } = useSessionSocket(code, 'host', (next) => {
     setSession(next);
   }, authProfileId);
@@ -63,7 +67,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
     try {
       const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${code}/action`, {
         method: 'POST',
-        body: JSON.stringify({ action, payload }),
+        body: JSON.stringify({ action, payload: { questionId: session.currentQuestion?.id, ...payload } }),
       });
       setSession(res.session);
     } catch (err) {
@@ -162,14 +166,20 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
   const inPlay = session.phase === 'playing' || session.phase === 'paused';
   const canScore = inPlay && q && !session.answerRevealed &&
     session.memoryPhase !== 'memorize' && !session.bidState;
-  const lastQuestion = session.currentQuestionIndexInRound + 1 >= (round?.questionsPerRound ?? 1);
+  const sprint = Boolean(roundMeta?.multiQuestionWithinTimer || (round?.goldenTargetType && ROUND_RULES[round.goldenTargetType].multiQuestionWithinTimer));
+  const canSkip = session.settings.showMode && sprint && session.timerRunning && !session.answerRevealed && q;
+  const lastQuestion = (session.settings.showMode && (sprint || !q)) || session.currentQuestionIndexInRound + 1 >= (round?.questionsPerRound ?? 1);
   const lastRound = session.currentRoundIndex + 1 >= session.rounds.length;
   const primary = session.phase === 'vs' || session.phase === 'lobby'
     ? { label: 'بدء المباراة', action: 'start_match' }
+    : session.phase === 'round_intro'
+    ? { label: 'يلا، ابدأ العدّ', action: 'round_countdown' }
+    : session.phase === 'countdown'
+    ? { label: 'تجاوز العدّ', action: 'skip_intro' }
     : session.phase === 'round_summary'
     ? { label: 'ابدأ الجولة التالية', action: 'next_round' }
-    : inPlay
-    ? { label: !lastQuestion ? 'السؤال التالي' : lastRound ? 'إعلان النتيجة' : 'عرض نتيجة الجولة', action: 'next_question' }
+    : inPlay && !(session.settings.showMode && session.bidState && !session.answerRevealed)
+    ? { label: canSkip ? 'تخطّى للسؤال التالي' : !lastQuestion ? 'السؤال التالي' : lastRound ? 'إعلان النتيجة' : 'عرض نتيجة الجولة', action: 'next_question' }
     : null;
 
   const accuracy =
@@ -178,7 +188,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
       : 0;
 
   return (
-    <div className="min-h-screen bg-[#09143A] text-slate-50 p-4 sm:p-6">
+    <div className="show-host min-h-screen text-slate-50 p-4 sm:p-6">
       <div className="max-w-6xl mx-auto space-y-5">
         {/* Top Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -192,7 +202,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
               <span>عودة خطوة</span>
             </button>
             <div>
-              <h1 className="text-lg font-black text-white">لوحة تحكم المشرف والحكم</h1>
+              <h1 className="text-lg font-black text-white">هاتف الحكم</h1>
               <div className="text-xs text-slate-300 flex items-center gap-2">
                 <span>
                   الرمز: <strong className="font-mono text-amber-300">{session.code}</strong>
@@ -231,6 +241,8 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
           </div>
         </div>
 
+        <div className="show-host__ribbon"><ScoreRibbon session={session} /></div>
+        {(session.phase === 'vs' || session.phase === 'round_intro' || session.phase === 'countdown') && <div className="show-host__intermission"><ShowIntermission session={session} countdown={countdown} /></div>}
         {error && <p role="alert" className="rounded-xl bg-rose-500/20 p-3 text-rose-100">{error}</p>}
         {session.phase === 'round_summary' || session.phase === 'finished' ? (
           <div className="rounded-xl bg-[#101E52] p-4 text-center">
@@ -246,14 +258,21 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
               className="w-full rounded-xl bg-sky-400 px-4 py-3 text-lg font-black text-slate-950 disabled:opacity-50">
               {primary.label}
             </button>
+            {session.phase === 'round_intro' && <button type="button" className="show-link" onClick={() => act('skip_intro')}>تجاوز المقدّمة</button>}
           </div>
         )}
 
+        {inPlay && session.settings.showMode && <details className="show-host__jump">
+          <summary>تغيير الجولة</summary>
+          <div>{session.rounds.map((item, index) => <button type="button" key={index} disabled={busy || index === session.currentRoundIndex}
+            onClick={() => { if (window.confirm('تنتقل إلى هذه الجولة الآن؟')) act('jump_round', { roundIndex: index }); }}>
+            {index + 1} · {item.titleAr}</button>)}</div>
+        </details>}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           {/* Left: Active Question, Secret Answer & Analytics */}
           <div className="lg:col-span-8 space-y-4">
             {/* Round & Timer Controls */}
-            <div className="rounded-2xl bg-[#101E52] border border-sky-400/25 p-4 flex flex-wrap items-center justify-between gap-4">
+            <div className="show-host__tools rounded-2xl bg-[#101E52] border border-sky-400/25 p-4 flex flex-wrap items-center justify-between gap-4">
               <div>
                 <div className="text-xs text-violet-300 font-bold flex items-center gap-2">
                   <span>
@@ -269,13 +288,13 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {inPlay && q && !session.answerRevealed && !session.bidState && session.memoryPhase !== 'memorize' && (
+                {inPlay && q && !session.answerRevealed && session.bidState?.phase !== 'bidding' && session.memoryPhase !== 'memorize' && (
                   <button type="button" disabled={busy} onClick={() => act(session.timerRunning ? 'pause_timer' : 'start_timer')}
                     className="rounded-xl bg-white/10 px-4 py-3 text-sm font-bold">
                     {session.timerRunning ? 'أوقف المؤقت' : 'شغّل المؤقت'}
                   </button>
                 )}
-                {inPlay && q && !session.answerRevealed && !session.bidState && session.memoryPhase !== 'memorize' && (
+                {inPlay && q && !session.answerRevealed && session.bidState?.phase !== 'bidding' && session.memoryPhase !== 'memorize' && (
                   <button type="button" disabled={busy} onClick={() => act('reset_timer')}
                     className="rounded-xl bg-white/10 px-3 py-2 text-xs font-bold">
                     إعادة المؤقت
@@ -333,9 +352,9 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
                   </span>
                 </div>
 
-                <div className="rounded-xl bg-[#09143A] p-4 border border-white/10">
-                  <div className="text-xs text-slate-400 mb-1">نص السؤال المعروض للجمهور:</div>
-                  <div className="text-lg font-extrabold text-white">{q.prompt}</div>
+                <div className="show-host__question rounded-xl">
+                  <div className="text-xs mb-1 flex items-center gap-2"><RoundArt type={q.roundType} /> السؤال المعروض للجمهور</div>
+                  <div className="text-lg font-extrabold">{q.prompt}</div>
                 </div>
 
                 {/* Secret Host Answer Block */}
@@ -355,6 +374,17 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
                   )}
                 </div>
 
+                {q.roundType === 'buzzer' && session.settings.showMode && session.buzzedTeamIndex === null && session.timerRunning &&
+                  <div className="show-host__items"><strong>سجّل أول ضغطة</strong><div>{session.teams.map((team) =>
+                    <button type="button" key={team.index} disabled={busy || session.failedBuzzTeams.includes(team.index)}
+                      onClick={async () => {
+                        try {
+                          await apiFetch(`/api/sessions/${session.code}/buzz`, { method: 'POST', body: JSON.stringify({ teamIndex: team.index }) });
+                        } catch (err) { setError(err instanceof Error ? err.message : 'الجرس مش متاح.'); }
+                      }}><Bell size={16} /> {team.name}</button>)}</div></div>}
+                {session.bidState && !session.answerRevealed && session.bidState.acceptedAnswers.length > 0 &&
+                  <div className="show-host__items"><strong>تصحيح العدّ</strong><div>{session.bidState.acceptedAnswers.map((answer) =>
+                    <button type="button" key={answer} disabled={busy} onClick={() => act('bid_remove_answer', { answerText: answer })}>إزالة {answer}</button>)}</div></div>}
                 {/* Bid Challenge Referee Controls */}
                 {q.roundType === 'bid_challenge' && session.bidState && (
                   <div className="rounded-xl bg-[#09143A] border border-amber-400/35 p-4 space-y-3">
@@ -475,7 +505,14 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
                   </div>
                 )}
 
-                {canScore && q.roundType === 'list_multiple' && (
+                {inPlay && session.settings.showMode && q.roundType === 'list_multiple' && (
+                  <div className="show-host__items">
+                    <strong>القطع المقبولة {session.listProgress?.accepted ?? 0}/{session.listProgress?.required ?? 3}</strong>
+                    <div>{secret.acceptableAnswers.map((item) => <button type="button" key={item} aria-pressed={secret.acceptedItems?.includes(item) ?? false}
+                      disabled={busy || session.answerRevealed} onClick={() => act('list_toggle_item', { item })}>{item}</button>)}</div>
+                  </div>
+                )}
+                {canScore && !session.settings.showMode && q.roundType === 'list_multiple' && (
                   <label className="flex items-center gap-2 text-sm">
                     عدد الإجابات الصحيحة
                     <select className="rounded bg-[#09143A] p-2" value={matchedItems} onChange={(e) => setMatchedItems(Number(e.target.value))}>
@@ -490,7 +527,8 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
                     <button
                       key={t.index}
                       type="button"
-                      disabled={busy}
+                      disabled={busy || (session.settings.showMode && q.roundType === 'buzzer' && session.buzzedTeamIndex !== t.index) ||
+                        (session.settings.showMode && q.roundType === 'list_multiple' && !session.listProgress?.accepted)}
                       onClick={() => act('award_team', { teamIndex: t.index, matchedListCount: q.roundType === 'list_multiple' ? matchedItems : undefined })}
                       className="py-3 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap truncate"
                     >
@@ -723,11 +761,12 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
             <div className="rounded-2xl bg-[#101E52] border border-sky-400/25 p-4 space-y-2.5">
               <h2 className="text-sm font-extrabold text-white flex items-center gap-1.5">
                 <Bell className="w-4 h-4 text-amber-300" />
-                <span>روابط جرس الهاتف للفرق</span>
+                <span>روابط الفرق · الجرس والإجابة</span>
               </h2>
               <div className="space-y-2">
                 {session.teams.map((t) => {
-                  const buzzUrl = `${window.location.origin}/?mode=buzzer&code=${session.code}&team=${t.index}`;
+                  const teamKey = secret.teamKeys?.[t.index];
+                  const buzzUrl = `${window.location.origin}/?mode=buzzer&code=${session.code}&team=${t.index}${teamKey ? '#key=' + teamKey : ''}`;
                   const key = `buzz-${t.index}`;
                   return (
                     <button
@@ -736,7 +775,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
                       onClick={() => copyLink(key, buzzUrl)}
                       className="w-full px-3 py-2 rounded-xl bg-[#09143A] hover:bg-[#132666] border border-white/10 text-xs font-bold flex items-center justify-between gap-2"
                     >
-                      <span className="truncate">نسخ جرس: {t.name}</span>
+                      <span className="truncate">رابط فريق {t.name}</span>
                       <span className="text-sky-300 shrink-0">
                         {copiedKey === key ? 'تم النسخ!' : 'نسخ الرابط'}
                       </span>

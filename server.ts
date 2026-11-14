@@ -6,16 +6,28 @@ import { createAppAndHub } from './src/server/appFactory';
 import { createDatabase } from './src/server/db';
 import { seedDatabase } from './src/server/seed';
 import { importGeminiBank } from './src/server/importGeminiBank';
+import { importFullBank } from './src/server/importFullBank';
+import { readBundledBank } from './src/server/bundledBankData';
 import geminiBank from './data/imports/questions_bank_5000.json';
 
 const PORT = Number(process.env.PORT || 3000);
 const isProd = process.env.NODE_ENV === 'production';
 
-const db = createDatabase();
+const db = createDatabase(process.env.T30_DB_PATH || undefined);
 seedDatabase(db);
 const importReport = importGeminiBank(db, geminiBank);
 if (importReport.accepted || importReport.rejected) {
   console.log(`Gemini bank: ${importReport.accepted} imported, ${importReport.duplicateCount} existing, ${importReport.rejected} rejected.`);
+}
+
+for (const [label, dataset] of [
+  ['Variety bank', 'thirty_seconds_question_bank'],
+  ['Sports & religion add-on', 'thirty_30s_sports_religion_addon'],
+] as const) {
+  const report = importFullBank(db, readBundledBank(dataset));
+  if (report.published || report.needsReview || report.invalid.length) {
+    console.log(`${label}: ${report.published} ready, ${report.needsReview} pending review, ${report.duplicates} existing, ${report.invalid.length} rejected.`);
+  }
 }
 
 const { app, hub } = createAppAndHub(db);

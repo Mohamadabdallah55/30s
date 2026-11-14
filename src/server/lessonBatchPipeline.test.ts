@@ -22,6 +22,7 @@ import {
   TransientNetworkError,
 } from './lessonStudio';
 import { seedDatabase } from './seed';
+import { GameSessionHub } from './wsHub';
 import type { RoundType } from '../shared/types';
 
 function makeValidPdfBuffer(pageCount = 17): Buffer {
@@ -340,6 +341,27 @@ test('Supports 10, 30, and 100 requested questions via incremental distribution 
     );
 
     assert.equal(summary.verifiedCount, target, `Expected exact ${target} verified questions`);
+    if (target === 10) {
+      assert.equal(summary.publishedCount, 0);
+      assert.equal(summary.needsReviewCount, 10);
+      const hub = new GameSessionHub(db);
+      const config = { title: 'مباراة الدرس', bankId: summary.bankId, lessonId: summary.lessonId, hostProfileId: 'prof-teacher-1',
+        ageGroup: 'youth' as const, difficulty: 'mixed' as const, category: 'الكل', teams: [],
+        roundTypes: ['multiple_choice' as const], settings: { showMode: true, hostControlled: true },
+        roundOverrides: { multiple_choice: { questionsPerRound: 1 } } };
+      try {
+        assert.throws(() => hub.createSession(config), /لا توجد أسئلة جديدة/);
+        db.prepare("UPDATE questions SET status = 'published' WHERE bank_id = ? AND status = 'needs_review'").run(summary.bankId);
+        const { code } = hub.createSession(config);
+        assert.equal(hub.handleHostAction(code, 'start_match')?.phase, 'round_intro');
+        const live = hub.handleHostAction(code, 'skip_intro')!;
+        assert.equal(live.lessonId, summary.lessonId);
+        assert.ok(live.currentQuestion?.sourcePage && live.hostSecret?.sourceExcerpt);
+        assert.equal(hub.getSessionView(code, false)?.hostSecret, undefined);
+        assert.ok(hub.handleHostAction(code, 'award_team')?.answerRevealed);
+        assert.equal(hub.handleHostAction(code, 'next_question')?.phase, 'finished');
+      } finally { hub.stop(); }
+    }
     const doc = db.prepare(`SELECT storage_path FROM lesson_documents WHERE lesson_id = ?`).get(summary.lessonId) as {
       storage_path: string;
     };

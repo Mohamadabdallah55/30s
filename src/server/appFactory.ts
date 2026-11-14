@@ -238,7 +238,7 @@ export function createAppAndHub(db: Database.Database) {
       category,
       categories,
       participantProfileIds: participantIds,
-      exactRounds: bankId.startsWith('bank-import-'),
+      exactRounds: true,
     });
     res.json(availability);
   });
@@ -723,44 +723,23 @@ export function createAppAndHub(db: Database.Database) {
   // ================= LIVE GAME SESSIONS & HOST/AUDIENCE SYNC =================
 
   app.get('/api/sessions/resumable', (req: AuthedRequest, res) => {
-    const rows = db
-      .prepare(
-        `SELECT code, title, phase, bank_id, host_profile_id, state_json, updated_at
-         FROM game_sessions
-         WHERE phase != 'finished'
-         ORDER BY updated_at DESC
-         LIMIT 12`
-      )
-      .all() as Array<{
-      code: string;
-      title: string;
-      phase: string;
-      bank_id: string;
-      host_profile_id: string | null;
-      state_json: string;
-      updated_at: string;
+    const rows = db.prepare(`
+      SELECT code, title, phase, host_profile_id, updated_at
+      FROM game_sessions WHERE phase != 'finished' AND (host_profile_id = ? OR host_profile_id IS NULL)
+      ORDER BY updated_at DESC LIMIT 60
+    `).all(req.user?.id ?? null) as Array<{
+      code: string; title: string; phase: string; host_profile_id: string | null; updated_at: string;
     }>;
-
-    const sessions = rows.map((r) => {
-      const parsed = JSON.parse(r.state_json || '{}') as {
-        teams?: Array<{ name: string; points: number; color: string }>;
-        currentRoundIndex?: number;
-        rounds?: Array<{ titleAr: string }>;
-      };
-      return {
-        code: r.code,
-        title: r.title,
-        phase: r.phase,
-        teams: (parsed.teams ?? []).map((t) => ({ name: t.name, points: t.points, color: t.color })),
-        roundIndex: parsed.currentRoundIndex ?? 0,
-        totalRounds: parsed.rounds?.length ?? 0,
-        updatedAt: r.updated_at,
-        canHostControl:
-          !r.host_profile_id ||
-          (req.user && (req.user.role === 'admin' || req.user.role === 'teacher' || req.user.id === r.host_profile_id)),
-      };
-    });
-
+    const sessions = rows.filter((row) => row.host_profile_id ? row.host_profile_id === req.user?.id : Boolean(
+      req.headers.cookie?.includes(`t30_host_${row.code}=`) &&
+      (() => {
+        const session = hub.getSessionInternal(row.code);
+        return session && hub.canGuestHost(session, req.headers.cookie);
+      })()
+    )).slice(0, 12).map((row) => ({
+      code: row.code, title: row.title, phase: row.phase, updatedAt: row.updated_at, canHostControl: true,
+      hostControlled: hub.getSessionInternal(row.code)?.settings.hostControlled,
+    }));
     res.json({ sessions });
   });
 
@@ -785,8 +764,17 @@ export function createAppAndHub(db: Database.Database) {
         res.status(401).json({ error: 'سجّل الدخول لاستخدام تحكم الهاتف.' });
         return;
       }
+      const guestHostKey = !req.user && body.settings?.showMode === true ? crypto.randomBytes(24).toString('hex') : undefined;
+      const isStaff = req.user?.role === 'teacher' || req.user?.role === 'admin';
+      if (body.teams && (!Array.isArray(body.teams) || body.teams.length > 8 || body.teams.some((team) => !team || typeof team.name !== 'string' ||
+          (team.participantIds != null && (!Array.isArray(team.participantIds) || team.participantIds.length > 40 ||
+            team.participantIds.some((id) => typeof id !== 'string' || (!isStaff && id !== req.user?.id))))))) {
+        res.status(400).json({ error: 'راجع أسماء الفرق والمشاركين.' });
+        return;
+      }
       const session = hub.createSession({
         hostProfileId: req.user?.id ?? null,
+        guestHostKey,
         title: body.title || 'تحدي الـ30 ثانية — مسجد ابن تيمية',
         bankId: body.bankId || 'bank-general-mosque',
         lessonId: body.lessonId ?? null,
@@ -801,8 +789,11 @@ export function createAppAndHub(db: Database.Database) {
         skipVs: Boolean(body.skipVs),
       });
 
+      if (guestHostKey) res.cookie(`t30_host_${session.code}`, guestHostKey, {
+        httpOnly: true, sameSite: 'strict', secure: req.secure || req.get('x-forwarded-proto') === 'https', maxAge: 86400000,
+      });
       const isHostAllowed =
-        !session.hostProfileId ||
+        Boolean(guestHostKey) || !session.hostProfileId ||
         req.user?.id === session.hostProfileId ||
         req.user?.role === 'admin' ||
         req.user?.role === 'teacher';
@@ -821,7 +812,7 @@ export function createAppAndHub(db: Database.Database) {
     const wantsHost = req.query.role === 'host';
     const canSeeHost =
       wantsHost &&
-      (!s.hostProfileId ||
+      (hub.canGuestHost(s, req.headers.cookie) ||
         (req.user && (req.user.role === 'admin' || req.user.role === 'teacher' || req.user.id === s.hostProfileId)));
     res.json({ session: hub.getSessionView(req.params.code, Boolean(canSeeHost)) });
   });
@@ -833,7 +824,7 @@ export function createAppAndHub(db: Database.Database) {
       return;
     }
     const isAuthorizedHost =
-      !s.hostProfileId ||
+      hub.canGuestHost(s, req.headers.cookie) ||
       (req.user && (req.user.role === 'admin' || req.user.role === 'teacher' || req.user.id === s.hostProfileId));
     if (!isAuthorizedHost) {
       res.status(403).json({ error: 'تصدير بيانات المباراة متاح للمشرف فقط' });
@@ -880,7 +871,7 @@ export function createAppAndHub(db: Database.Database) {
       return;
     }
     const isAuthorizedHost =
-      !s.hostProfileId ||
+      hub.canGuestHost(s, req.headers.cookie) ||
       (req.user && (req.user.role === 'admin' || req.user.role === 'teacher' || req.user.id === s.hostProfileId));
 
     if (!isAuthorizedHost) {
@@ -898,25 +889,44 @@ export function createAppAndHub(db: Database.Database) {
   });
 
   app.post('/api/sessions/:code/answer', (req: AuthedRequest, res) => {
-    if (hub.getSessionInternal(req.params.code)?.settings.hostControlled) {
+    const { teamIndex, submitted, questionId, teamKey } = req.body;
+    const s = hub.getSessionInternal(req.params.code);
+    const team = teamIndex ?? 0;
+    const valid = (typeof submitted === 'string' && submitted.length <= 600) ||
+      (Number.isInteger(submitted) && submitted >= 0 && submitted < 20) ||
+      (Array.isArray(submitted) && submitted.length <= 20 && submitted.every((part) => typeof part === 'string' && part.length <= 160));
+    if (!s || !Number.isInteger(team) || !valid) {
+      res.status(400).json({ error: 'الإجابة أو المباراة غير صالحة' });
+      return;
+    }
+    const owner = s.hostProfileId ? req.user?.id === s.hostProfileId || req.user?.role === 'admin' || req.user?.role === 'teacher' : hub.canGuestHost(s, req.headers.cookie);
+    const teamAuthorized = s.settings.showMode === true && hub.canTeamPlay(s, team, teamKey);
+    if (s.settings.showMode && ((!owner && (!teamAuthorized || s.currentQuestion?.roundType !== 'multiple_choice')) ||
+        (s.settings.hostControlled && (!teamAuthorized || s.currentQuestion?.roundType !== 'multiple_choice')))) {
+      res.status(403).json({ error: 'استخدم رابط فريقك أو لوحة المشرف للإجابة.' });
+      return;
+    }
+    if (s.settings.hostControlled && !s.settings.showMode) {
       res.status(403).json({ error: 'المشرف يسجّل الإجابات من هاتف التحكم.' });
       return;
     }
-    const { teamIndex, submitted } = req.body as {
-      teamIndex: number;
-      submitted: string | number | string[];
-    };
-    const result = hub.submitPlayerAnswer(req.params.code, Number(teamIndex ?? 0), submitted, req.user?.id);
+    const result = hub.submitPlayerAnswer(req.params.code, team, submitted, req.user?.id, questionId, teamAuthorized);
     if (!result) {
-      res.status(400).json({ error: 'تعذر تسجيل الإجابة في الوضع الحالي أو انتهى الوقت' });
+      res.status(400).json({ error: 'تغيّر السؤال، أو انتهى وقت الإجابة.' });
       return;
     }
     res.json(result);
   });
 
-  app.post('/api/sessions/:code/buzz', (req, res) => {
-    const { teamIndex } = req.body as { teamIndex: number };
-    const view = hub.handleBuzz(req.params.code, Number(teamIndex ?? 0));
+  app.post('/api/sessions/:code/buzz', (req: AuthedRequest, res) => {
+    const { teamIndex, teamKey, questionId } = req.body;
+    const s = hub.getSessionInternal(req.params.code);
+    const owner = s && (s.hostProfileId ? req.user?.id === s.hostProfileId || req.user?.role === 'admin' || req.user?.role === 'teacher' : hub.canGuestHost(s, req.headers.cookie));
+    if (s?.settings.showMode && !owner && !hub.canTeamPlay(s, teamIndex, teamKey)) {
+      res.status(403).json({ error: 'افتح جرس فريقك من الرابط الذي يرسله المشرف.' });
+      return;
+    }
+    const view = hub.handleBuzz(req.params.code, teamIndex ?? 0, questionId);
     if (!view) {
       res.status(409).json({ error: 'الجرس غير متاح الآن أو سبقك فريق آخر' });
       return;
@@ -937,9 +947,9 @@ export function createAppAndHub(db: Database.Database) {
       return;
     }
     const isAuthorizedHost =
-      !s.hostProfileId ||
+      hub.canGuestHost(s, req.headers.cookie) ||
       (req.user && (req.user.role === 'admin' || req.user.role === 'teacher' || req.user.id === s.hostProfileId));
-    if (s.settings.hostControlled && !isAuthorizedHost) {
+    if ((s.settings.hostControlled || s.settings.showMode) && !isAuthorizedHost) {
       res.status(403).json({ error: 'المشرف يدير المزايدة من هاتف التحكم.' });
       return;
     }
