@@ -207,6 +207,11 @@ export function AudienceProjector({ code, onExit }: AudienceProjectorProps) {
               {session.teams.map((t) => `${t.name}: ${t.points}`).join('  |  ')}
             </p>
           </div>
+        ) : session.phase === 'round_summary' ? (
+          <div className="rounded-3xl bg-[#101E52] p-10 text-center text-white space-y-4">
+            <h1 className="text-4xl font-black">نتيجة الجولة</h1>
+            <p className="text-2xl">{session.teams.map((team) => `${team.name}: ${team.points}`).join(' · ')}</p>
+          </div>
         ) : q ? (
           <div className="rounded-3xl bg-[#101E52] border border-sky-400/35 p-8 sm:p-12 space-y-6 text-center">
             <div className="inline-flex items-center gap-3 px-6 py-2 rounded-xl bg-[#6D28D9] text-white font-black text-lg">

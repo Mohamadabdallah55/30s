@@ -218,7 +218,7 @@ export function createAppAndHub(db: Database.Database) {
     });
   });
 
-  app.get('/api/questions/availability', (req, res) => {
+  app.get('/api/questions/availability', (req: AuthedRequest, res) => {
     const bankId = String(req.query.bankId || 'bank-general-mosque');
     const ageGroup = normalizeAgeGroup(String(req.query.ageGroup || 'family'));
     const difficulty = (String(req.query.difficulty || 'mixed') as Difficulty | 'mixed');
@@ -229,9 +229,7 @@ export function createAppAndHub(db: Database.Database) {
           .map((c) => c.trim())
           .filter(Boolean)
       : undefined;
-    const participantIds = req.query.participantIds
-      ? String(req.query.participantIds).split(',').filter(Boolean)
-      : [];
+    const participantIds = req.user ? [req.user.id] : [];
 
     const availability = getBankAvailability(db, {
       bankId,
@@ -240,6 +238,7 @@ export function createAppAndHub(db: Database.Database) {
       category,
       categories,
       participantProfileIds: participantIds,
+      exactRounds: bankId.startsWith('bank-import-'),
     });
     res.json(availability);
   });
@@ -782,6 +781,10 @@ export function createAppAndHub(db: Database.Database) {
         skipVs?: boolean;
       };
 
+      if (body.settings?.hostControlled && !req.user) {
+        res.status(401).json({ error: 'سجّل الدخول لاستخدام تحكم الهاتف.' });
+        return;
+      }
       const session = hub.createSession({
         hostProfileId: req.user?.id ?? null,
         title: body.title || 'تحدي الـ30 ثانية — مسجد ابن تيمية',
@@ -886,11 +889,19 @@ export function createAppAndHub(db: Database.Database) {
     }
 
     const { action, payload } = req.body as { action: string; payload?: Record<string, unknown> };
-    const updated = hub.handleHostAction(req.params.code, action, payload || {});
-    res.json({ session: updated });
+    try {
+      const updated = hub.handleHostAction(req.params.code, action, payload || {});
+      res.json({ session: updated });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر تنفيذ الإجراء' });
+    }
   });
 
   app.post('/api/sessions/:code/answer', (req: AuthedRequest, res) => {
+    if (hub.getSessionInternal(req.params.code)?.settings.hostControlled) {
+      res.status(403).json({ error: 'المشرف يسجّل الإجابات من هاتف التحكم.' });
+      return;
+    }
     const { teamIndex, submitted } = req.body as {
       teamIndex: number;
       submitted: string | number | string[];
@@ -928,6 +939,10 @@ export function createAppAndHub(db: Database.Database) {
     const isAuthorizedHost =
       !s.hostProfileId ||
       (req.user && (req.user.role === 'admin' || req.user.role === 'teacher' || req.user.id === s.hostProfileId));
+    if (s.settings.hostControlled && !isAuthorizedHost) {
+      res.status(403).json({ error: 'المشرف يدير المزايدة من هاتف التحكم.' });
+      return;
+    }
     const result = hub.handleBidAction(req.params.code, action, payload || {}, Boolean(isAuthorizedHost));
     if (!result) {
       res.status(400).json({ error: 'جولة مين يزوّد غير نشطة حالياً' });

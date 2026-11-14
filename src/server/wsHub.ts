@@ -28,7 +28,7 @@ import type {
   TeamState,
   UndoActionSnapshot,
 } from '../shared/types';
-import { resetExposureCycleTx, selectNextQuestionTx } from './questionSelection';
+import { getBankAvailability, resetExposureCycleTx, selectNextQuestionTx } from './questionSelection';
 import { resolveUserFromToken } from './rbac';
 
 export interface InternalSessionState {
@@ -154,6 +154,7 @@ export class GameSessionHub {
             return;
           }
           if (msg.type === 'bid_raise' || msg.type === 'bid_challenge') {
+            if (session.settings.hostControlled && role !== 'host') return;
             this.handleBidAction(code, msg.type, msg.payload || {}, role === 'host');
             return;
           }
@@ -208,8 +209,8 @@ export class GameSessionHub {
         session.memoryEndsAtMs = null;
         const dur = session.rounds[session.currentRoundIndex]?.durationSec ?? session.settings.defaultTimerSec ?? 30;
         session.timerRemainingSec = dur;
-        session.timerRunning = true;
-        session.timerEndsAtMs = now + dur * 1000;
+        session.timerRunning = !session.settings.hostControlled;
+        session.timerEndsAtMs = session.timerRunning ? now + dur * 1000 : null;
         changed = true;
       }
     } else if (session.phase === 'playing' && session.timerRunning && session.timerEndsAtMs) {
@@ -247,12 +248,17 @@ export class GameSessionHub {
     skipVs?: boolean;
   }): InternalSessionState {
     const bankRow = this.db
-      .prepare(`SELECT id, name, lesson_id FROM question_banks WHERE id = ?`)
+      .prepare(`SELECT id, name, lesson_id FROM question_banks WHERE id = ? AND is_active = 1`)
       .get(params.bankId) as { id: string; name: string; lesson_id: string | null } | undefined;
     if (!bankRow) {
       throw new Error('بنك الأسئلة المحدد غير موجود');
     }
 
+    if (params.settings?.hostControlled && !params.hostProfileId) {
+      throw new Error('سجّل الدخول قبل إنشاء مباراة بتحكم الهاتف.');
+    }
+
+    const skipVs = Boolean(params.skipVs && !params.settings?.hostControlled);
     const code = this.generateUniqueCode();
     const id = `sess-${crypto.randomUUID().slice(0, 8)}`;
     const defaultTimer = params.settings?.defaultTimerSec ?? 30;
@@ -266,6 +272,8 @@ export class GameSessionHub {
       }
     }
 
+    if (roundTypes.some((type) => !Object.hasOwn(ROUND_RULES, type) ||
+        (type === 'golden' && mergedOverrides.golden?.goldenTargetType && !Object.hasOwn(ROUND_RULES, mergedOverrides.golden.goldenTargetType)))) throw new Error('نوع الجولة غير متاح.');
     const rounds = buildDefaultRoundConfigs(roundTypes, mergedOverrides);
 
     const teams: TeamState[] = (params.teams.length > 0 ? params.teams : [
@@ -281,6 +289,24 @@ export class GameSessionHub {
       participantIds: t.participantIds ?? [],
       participantNames: t.participantNames ?? [],
     }));
+
+    if (bankRow.id.startsWith('bank-import-')) {
+      const participants = teams.flatMap((team) => team.participantIds);
+      if (params.hostProfileId) participants.push(params.hostProfileId);
+      const { byRoundType } = getBankAvailability(this.db, {
+        bankId: bankRow.id, ageGroup: params.ageGroup, difficulty: params.difficulty,
+        category: params.category, categories: params.categories,
+        participantProfileIds: participants, exactRounds: true,
+      });
+      const remaining = new Map<RoundType, number>();
+      for (const round of rounds) {
+        const type = round.goldenTargetType ?? round.roundType;
+        const available = remaining.get(type) ?? byRoundType[type]?.unseen ?? 0;
+        if (available < 1) throw new Error(`لا توجد أسئلة جديدة تكفي لجولة «${round.titleAr}» ضمن الفلاتر المختارة.`);
+        round.questionsPerRound = Math.min(available, round.questionsPerRound);
+        remaining.set(type, available - round.questionsPerRound);
+      }
+    }
 
     const settings: SessionSettings = {
       soundEnabled: false,
@@ -307,7 +333,7 @@ export class GameSessionHub {
       difficulty: params.difficulty,
       category: params.category || 'الكل',
       categories: (params.categories ?? []).filter((c) => c && c !== 'الكل'),
-      phase: params.skipVs ? 'playing' : 'vs',
+      phase: skipVs ? 'playing' : 'vs',
       teams,
       activeTeamIndex: 0,
       buzzedTeamIndex: null,
@@ -319,7 +345,7 @@ export class GameSessionHub {
       timerRunning: false,
       timerEndsAtMs: null,
       answerRevealed: false,
-      hasShownIntro: Boolean(params.skipVs),
+      hasShownIntro: skipVs,
       isClutchTime: rounds.length === 1 || rounds[0]?.roundType === 'golden',
       overtimeTieBreaker: false,
       previousLeaderIndex: null,
@@ -403,7 +429,7 @@ export class GameSessionHub {
       }
     })();
 
-    if (params.skipVs) {
+    if (skipVs) {
       this.drawQuestionForCurrentSlot(session, true);
     }
 
@@ -537,6 +563,7 @@ export class GameSessionHub {
     if (includeHostSecret) {
       view.hostSecret = {
         acceptableAnswers: s.currentQuestion?.acceptableAnswers ?? [],
+        requiredCount: s.currentQuestion?.requiredCount,
         correctIndex: s.currentQuestion?.correctIndex,
         explanation: s.currentQuestion?.explanation,
         oddReason: s.currentQuestion?.oddReason,
@@ -659,6 +686,7 @@ export class GameSessionHub {
     }
 
     const allParticipants = s.teams.flatMap((t) => t.participantIds);
+    if (s.hostProfileId && s.bankId.startsWith('bank-import-')) allParticipants.push(s.hostProfileId);
     const draw = selectNextQuestionTx(this.db, {
       bankId: s.bankId,
       roundType: round.roundType,
@@ -702,7 +730,7 @@ export class GameSessionHub {
       round.roundType === 'golden' && round.goldenTargetType ? round.goldenTargetType : round.roundType;
     const now = Date.now();
     if (effectiveType === 'bid_challenge') {
-      const maxPossible = draw.question.acceptableAnswers.length >= 4 ? draw.question.acceptableAnswers.length : 12;
+      const maxPossible = new Set(draw.question.acceptableAnswers.map(normalizeArabicText).filter(Boolean)).size;
       const starter = s.activeTeamIndex % Math.max(1, s.teams.length);
       const nextTurn = s.teams.length > 1 ? (starter + 1) % s.teams.length : starter;
       s.bidState = {
@@ -764,6 +792,7 @@ export class GameSessionHub {
     if (!s || s.phase !== 'playing') return null;
     this.syncLiveTimer(s);
     if (s.answerRevealed || s.timerRemainingSec <= 0) return null;
+    if (s.settings.hostControlled && (!s.timerRunning || s.currentQuestion?.roundType !== 'buzzer')) return null;
     if (teamIndex < 0 || teamIndex >= s.teams.length) return null;
     if (s.failedBuzzTeams.includes(teamIndex)) return null;
     if (s.buzzedTeamIndex !== null) return null;
@@ -858,7 +887,7 @@ export class GameSessionHub {
     isHost = false
   ): { ok: boolean; error?: string; view: GameSessionView } | null {
     const s = this.getSessionInternal(code);
-    if (!s || s.phase !== 'playing' || !s.bidState) return null;
+    if (!s || s.phase !== 'playing' || !s.bidState || (s.settings.hostControlled && !isHost)) return null;
     this.syncLiveTimer(s);
     const round = s.rounds[s.currentRoundIndex];
     if (!round) return null;
@@ -983,7 +1012,7 @@ export class GameSessionHub {
     profileId?: string
   ): { isCorrect: boolean; pointsDelta: number; view: GameSessionView } | null {
     const s = this.getSessionInternal(code);
-    if (!s || !s.currentQuestion || s.phase !== 'playing') return null;
+    if (!s || !s.currentQuestion || s.phase !== 'playing' || s.settings.hostControlled) return null;
     this.syncLiveTimer(s);
     if (s.answerRevealed || s.timerRemainingSec <= 0) return null;
 
@@ -1019,7 +1048,7 @@ export class GameSessionHub {
         revealedClueCount: s.revealedClueCount,
         streakCount: team.streak,
         matchedListCount: evalRes.matchedCount,
-        totalRequiredListCount: Math.min(3, s.currentQuestion.acceptableAnswers.length || 3),
+        totalRequiredListCount: s.currentQuestion.requiredCount ?? Math.min(3, s.currentQuestion.acceptableAnswers.length || 3),
       });
       team.points += pointsDelta;
       this.recordAudit(s, targetTeamIdx, pointsDelta, `إجابة صحيحة (${round.titleAr})`);
@@ -1139,11 +1168,12 @@ export class GameSessionHub {
 
     switch (action) {
       case 'start_match': {
+        if (s.phase !== 'vs' && s.phase !== 'lobby') break;
         s.phase = 'playing';
         s.currentRoundIndex = 0;
         s.currentQuestionIndexInRound = 0;
         s.stats.rapidFireAnsweredInRound = 0;
-        this.drawQuestionForCurrentSlot(s, true);
+        this.drawQuestionForCurrentSlot(s, !s.settings.hostControlled);
         break;
       }
 
@@ -1153,6 +1183,7 @@ export class GameSessionHub {
       }
 
       case 'start_timer': {
+        if (!s.currentQuestion || s.answerRevealed || s.memoryPhase === 'memorize' || s.bidState?.phase === 'bidding') break;
         if (s.phase === 'paused') s.phase = 'playing';
         const dur = s.timerRemainingSec > 0 ? s.timerRemainingSec : round?.durationSec ?? 30;
         s.timerRemainingSec = dur;
@@ -1181,6 +1212,7 @@ export class GameSessionHub {
       }
 
       case 'reset_timer': {
+        if (s.settings.hostControlled) s.phase = 'playing';
         const dur = round?.durationSec ?? 30;
         s.timerRemainingSec = dur;
         s.timerRunning = true;
@@ -1221,6 +1253,7 @@ export class GameSessionHub {
       }
 
       case 'award_team': {
+        if ((s.phase !== 'playing' && s.phase !== 'paused') || !s.currentQuestion || s.bidState || s.answerRevealed) break;
         const teamIdx = Number(payload.teamIndex ?? s.activeTeamIndex);
         const team = s.teams[teamIdx];
         if (!team || !round) break;
@@ -1238,6 +1271,9 @@ export class GameSessionHub {
                 isCorrect: true,
                 revealedClueCount: s.revealedClueCount,
                 streakCount: team.streak + 1,
+                matchedListCount: typeof payload.matchedListCount === 'number'
+                  ? Math.max(1, Math.trunc(payload.matchedListCount)) : undefined,
+                totalRequiredListCount: s.currentQuestion.requiredCount ?? Math.min(3, s.currentQuestion.acceptableAnswers.length || 3),
               });
         team.points += pts;
         team.streak += 1;
@@ -1290,6 +1326,7 @@ export class GameSessionHub {
       }
 
       case 'strike_team': {
+        if (s.settings.hostControlled && (!s.currentQuestion || s.bidState || s.answerRevealed)) break;
         const teamIdx = Number(payload.teamIndex ?? s.activeTeamIndex);
         const team = s.teams[teamIdx];
         if (!team) break;
@@ -1337,7 +1374,7 @@ export class GameSessionHub {
         if (isSprint && round && s.timerRunning && s.timerRemainingSec > 0) {
           s.stats.rapidFireAnsweredInRound += 1;
           this.advanceSprintQuestionPreservingClock(s, round);
-        } else if (isBuzzerFlow && !transferTurn) {
+        } else if ((isBuzzerFlow && !transferTurn) || (s.settings.hostControlled && !isBuzzerFlow)) {
           s.answerRevealed = true;
           s.timerRunning = false;
           s.timerEndsAtMs = null;
@@ -1359,19 +1396,20 @@ export class GameSessionHub {
           // NEVER reset the 30-second countdown on rapid_fire / true_false skip!
           this.advanceSprintQuestionPreservingClock(s, round);
         } else {
-          this.drawQuestionForCurrentSlot(s, true);
+          this.drawQuestionForCurrentSlot(s, !s.settings.hostControlled);
         }
         break;
       }
 
       case 'next_question': {
-        if (!round) break;
+        if (!round || (s.phase !== 'playing' && s.phase !== 'paused')) break;
         if (s.currentQuestionIndexInRound + 1 < round.questionsPerRound) {
           s.currentQuestionIndexInRound += 1;
           if (s.teams.length > 1) {
             s.activeTeamIndex = (s.activeTeamIndex + 1) % s.teams.length;
           }
-          this.drawQuestionForCurrentSlot(s, true);
+          s.phase = 'playing';
+          this.drawQuestionForCurrentSlot(s, !s.settings.hostControlled);
         } else if (s.currentRoundIndex + 1 < s.rounds.length) {
           s.phase = 'round_summary';
           s.timerRunning = false;
@@ -1385,12 +1423,13 @@ export class GameSessionHub {
       }
 
       case 'next_round': {
+        if (s.settings.hostControlled && s.phase !== 'round_summary') break;
         if (s.currentRoundIndex + 1 < s.rounds.length) {
           s.currentRoundIndex += 1;
           s.currentQuestionIndexInRound = 0;
           s.stats.rapidFireAnsweredInRound = 0;
           s.phase = 'playing';
-          this.drawQuestionForCurrentSlot(s, true);
+          this.drawQuestionForCurrentSlot(s, !s.settings.hostControlled);
         } else {
           s.phase = 'finished';
           s.timerRunning = false;
@@ -1522,8 +1561,9 @@ export class GameSessionHub {
       case 'bid_pass':
       case 'bid_record_answer':
       case 'bid_complete': {
-        this.handleBidAction(code, action, payload, true);
-        break;
+        const result = this.handleBidAction(code, action, payload, true);
+        if (!result?.ok) throw new Error(result?.error ?? 'المزايدة غير متاحة الآن.');
+        return result.view;
       }
 
       case 'switch_category': {
@@ -1539,6 +1579,7 @@ export class GameSessionHub {
 
       case 'approve_cycle_reset': {
         const participantIds = s.teams.flatMap((t) => t.participantIds);
+        if (s.hostProfileId && s.bankId.startsWith('bank-import-')) participantIds.push(s.hostProfileId);
         resetExposureCycleTx(this.db, participantIds, s.bankId, s.category);
         s.usedQuestionIdsInSession = [];
         this.drawQuestionForCurrentSlot(s, true);

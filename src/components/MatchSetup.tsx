@@ -30,6 +30,7 @@ interface MatchSetupProps {
   initialBankId?: string;
   initialLessonId?: string | null;
   onBack: () => void;
+  onOpenAuth: () => void;
   onSessionCreated: (session: GameSessionView, launchMode: 'arena' | 'host_and_projector') => void;
 }
 
@@ -55,6 +56,7 @@ export function MatchSetup({
   initialLessonId,
   onBack,
   onSessionCreated,
+  onOpenAuth,
 }: MatchSetupProps) {
   const [banks, setBanks] = useState<QuestionBank[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
@@ -83,8 +85,9 @@ export function MatchSetup({
   const [timerSec, setTimerSec] = useState(30);
   const [verbalRapidFireDefault, setVerbalRapidFireDefault] = useState(true);
   const [buzzerWrongRule, setBuzzerWrongRule] = useState<'pass_to_other' | 'penalty_and_pass'>('pass_to_other');
-  const [launchMode, setLaunchMode] = useState<'arena' | 'host_and_projector'>('arena');
+  const [launchMode, setLaunchMode] = useState<'arena' | 'host_and_projector'>('host_and_projector');
 
+  const importedBank = bankId.startsWith('bank-import-');
   const [availability, setAvailability] = useState<{
     totalPublishedInFilter: number;
     unseenInFilter: number;
@@ -106,6 +109,10 @@ export function MatchSetup({
   }, [initialBankId]);
 
   useEffect(() => {
+    if (importedBank) setSelectedRounds([]);
+  }, [bankId, importedBank]);
+
+  useEffect(() => {
     const qs = new URLSearchParams({
       bankId,
       ageGroup: String(ageGroup),
@@ -115,15 +122,27 @@ export function MatchSetup({
     if (selectedCategories.length > 0) {
       qs.set('categories', selectedCategories.join(','));
     }
+    let current = true;
+    setAvailability(null);
     apiFetch<{
       totalPublishedInFilter: number;
       unseenInFilter: number;
       byRoundType: Record<string, { total: number; unseen: number }>;
       byCategory?: Record<string, { total: number; unseen: number }>;
     }>(`/api/questions/availability?${qs.toString()}`)
-      .then((res) => setAvailability(res))
+      .then((res) => {
+        if (!current) return;
+        setAvailability(res);
+        if (importedBank) {
+          setSelectedRounds((previous) => {
+            const viable = previous.filter((type) => type !== 'golden' && res.byRoundType[type]?.unseen > 0);
+            return viable.length ? viable : ALL_ROUND_TYPES.filter((type) => type !== 'golden' && res.byRoundType[type]?.unseen > 0);
+          });
+        }
+      })
       .catch(() => {});
-  }, [bankId, ageGroup, difficulty, selectedCategories]);
+    return () => { current = false; };
+  }, [bankId, ageGroup, difficulty, selectedCategories, user?.id, importedBank]);
 
   const applyPreset = (preset: MatchPreset) => {
     setActivePresetId(preset.id);
@@ -174,6 +193,14 @@ export function MatchSetup({
 
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (launchMode === 'host_and_projector' && !user) {
+      onOpenAuth();
+      return;
+    }
+    if ((importedBank && !availability) || !selectedRounds.length) {
+      setError('اختر جولة فيها أسئلة متاحة.');
+      return;
+    }
     if (colorConflict) {
       setError('اختر لونين مختلفين للفريقين لتجنب التباس العرض.');
       return;
@@ -222,6 +249,7 @@ export function MatchSetup({
           roundTypes: selectedRounds,
           roundOverrides,
           settings: {
+            hostControlled: launchMode === 'host_and_projector',
             defaultTimerSec: timerSec,
             verbalRapidFireDefault,
             buzzerWrongRule,
@@ -524,7 +552,7 @@ export function MatchSetup({
                     >
                       الكل
                     </button>
-                    {Array.from(new Set([...Object.keys(availability?.byCategory || {}), ...categories])).map((c) => {
+                    {(importedBank ? Object.keys(availability?.byCategory || {}) : Array.from(new Set([...Object.keys(availability?.byCategory || {}), ...categories]))).map((c) => {
                       const catStats = availability?.byCategory?.[c];
                       const active = selectedCategories.includes(c);
                       const count = catStats?.total;
@@ -591,7 +619,7 @@ export function MatchSetup({
                     rt === 'golden'
                       ? availability?.byRoundType?.[goldenTargetType]
                       : availability?.byRoundType?.[rt];
-                  const countForType = countObj?.total;
+                  const countForType = importedBank ? countObj?.unseen : countObj?.total;
                   const isEmpty = typeof countForType === 'number' && countForType === 0;
 
                   return (
@@ -599,6 +627,7 @@ export function MatchSetup({
                       key={rt}
                       type="button"
                       onClick={() => toggleRound(rt)}
+                      disabled={Boolean(importedBank && (isEmpty || rt === 'golden'))}
                       className={`p-3 rounded-xl border text-right transition-colors flex items-start justify-between gap-2 ${
                         active
                           ? 'bg-sky-500/20 border-sky-400 text-white'
@@ -744,18 +773,18 @@ export function MatchSetup({
                       launchMode === 'host_and_projector' ? 'bg-amber-400 text-slate-950' : 'text-slate-300'
                     }`}
                   >
-                    وضع المشرف + ربط البروجكتر (QR)
+                    تحكم من الهاتف
                   </button>
                 </div>
               </div>
 
               <button
                 type="submit"
-                disabled={creating || colorConflict}
+                disabled={creating || colorConflict || Boolean(importedBank && (!availability || !selectedRounds.length))}
                 className="w-full py-4 px-6 rounded-2xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-lg inline-flex items-center justify-center gap-3 transition-colors disabled:opacity-60"
               >
                 <Play className="w-5 h-5 fill-current" />
-                <span>{creating ? 'جاري تجهيز الجلسة...' : 'انطلاق إلى شاشة المواجهة (VS)'}</span>
+                <span>{creating ? 'جارٍ تجهيز المباراة...' : launchMode === 'arena' ? 'ابدأ اللعب' : 'افتح هاتف التحكم'}</span>
               </button>
             </div>
           </div>

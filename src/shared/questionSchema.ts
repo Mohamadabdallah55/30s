@@ -19,6 +19,7 @@ export interface ImportedQuestionCandidate {
   options: string[];
   acceptableAnswers: string[];
   correctIndex?: number | null;
+  requiredCount?: number;
   explanation?: string;
   clues?: string[];
   orderCriteria?: string;
@@ -78,6 +79,9 @@ export function coerceRoundType(raw: string): RoundType | null {
   const aliases: Record<string, RoundType> = {
     'الرشاش': 'rapid_fire',
     'rapid': 'rapid_fire',
+    'rapid_qa': 'rapid_fire',
+    'list_challenge': 'list_multiple',
+    'ordering': 'order_items',
     'اذكر ثلاثة': 'list_multiple',
     'اذكر خمسة': 'list_multiple',
     'list': 'list_multiple',
@@ -103,6 +107,47 @@ export function coerceRoundType(raw: string): RoundType | null {
     'bid': 'bid_challenge',
   };
   return aliases[val] ?? null;
+}
+
+/** Validate the fields the game needs to render and score each round. */
+export function validateRoundFields(question: Pick<ImportedQuestionCandidate,
+  'roundType' | 'options' | 'acceptableAnswers' | 'correctIndex' | 'clues' |
+  'memoryItems' | 'orderCriteria' | 'requiredCount' | 'oddReason'
+>): string | undefined {
+  const { roundType, correctIndex, requiredCount } = question;
+  const answers = question.acceptableAnswers.map(normalizeArabicText).filter(Boolean);
+  const options = question.options.map(normalizeArabicText);
+  const uniqueAnswers = new Set(answers);
+  if (!answers.length) return 'الإجابة المقبولة مفقودة';
+  if (['multiple_choice', 'true_false', 'odd_one_out'].includes(roundType)) {
+    if (options.length < 2 || options.includes('') || new Set(options).size !== options.length) {
+      return 'الخيارات مفقودة أو غير مميزة';
+    }
+    const matches = options.filter((option) => uniqueAnswers.has(option));
+    if (correctIndex == null ? matches.length !== 1 :
+      !Number.isInteger(correctIndex) || !uniqueAnswers.has(options[correctIndex]) || matches.length !== 1) {
+      return 'الاختيار الصحيح غير محدد بوضوح';
+    }
+    if (roundType === 'true_false' && (options.length !== 2 ||
+        !options.includes('صح') || !options.includes('خطا'))) return 'خيارات الصح والخطأ غير صالحة';
+  }
+  if (roundType === 'list_multiple' &&
+      ((requiredCount !== 3 && requiredCount !== 5) || uniqueAnswers.size < requiredCount)) {
+    return 'سؤال التعداد يحتاج 3 أو 5 عناصر مطلوبة وإجابات منفصلة كافية';
+  }
+  if (roundType === 'bid_challenge' && uniqueAnswers.size < 3) return 'المزايدة تحتاج ثلاثة عناصر مقبولة على الأقل';
+  if (roundType === 'who_am_i' && new Set(question.clues?.map(normalizeArabicText).filter(Boolean)).size < 3) {
+    return 'السؤال يحتاج ثلاثة أدلة متدرجة';
+  }
+  if (roundType === 'order_items' && (!question.orderCriteria?.trim() || answers.length < 2 ||
+      uniqueAnswers.size !== answers.length || options.length !== answers.length ||
+      new Set(options).size !== options.length || !options.every((option) => uniqueAnswers.has(option)) ||
+      options.every((option, index) => option === answers[index]))) {
+    return 'الترتيب يحتاج معياراً وخيارات معروضة بترتيب مختلف عن الحل';
+  }
+  if (roundType === 'memory' && new Set(question.memoryItems?.map(normalizeArabicText).filter(Boolean)).size < 2) {
+    return 'عناصر عرض تحدي الذاكرة مفقودة';
+  }
 }
 
 export function buildQuestionHash(prompt: string, answers: string[]): string {

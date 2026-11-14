@@ -396,6 +396,7 @@ export function createDatabase(dbPath?: string): Database.Database {
     db.pragma('foreign_keys = ON');
   }
 
+  ensureColumn('questions', 'required_count', 'INTEGER');
   return db;
 }
 

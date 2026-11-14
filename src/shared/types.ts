@@ -111,6 +111,7 @@ export interface QuestionRecord {
   prompt: string;
   options: string[];
   acceptableAnswers: string[];
+  requiredCount?: number | null;
   correctIndex?: number | null;
   explanation?: string;
   clues: string[];
@@ -180,6 +181,7 @@ export interface RoundConfig {
 }
 
 export interface SessionSettings {
+  hostControlled?: boolean;
   soundEnabled: boolean;
   calmMode: boolean; // Quiet mosque default
   reducedMotion: boolean;
@@ -284,6 +286,7 @@ export interface GameSessionView {
   // Host-only fields (strictly stripped for audience/player payloads):
   hostSecret?: {
     acceptableAnswers: string[];
+    requiredCount?: number | null;
     correctIndex?: number | null;
     explanation?: string;
     oddReason?: string;
