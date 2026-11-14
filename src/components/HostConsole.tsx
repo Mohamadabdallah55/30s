@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -29,27 +29,37 @@ interface HostConsoleProps {
   code: string;
   onBack: () => void;
   onOpenProjector: (code: string) => void;
+  onOpenAuth: () => void;
+  authProfileId?: string;
 }
 
-export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps) {
+export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authProfileId }: HostConsoleProps) {
   const [session, setSession] = useState<GameSessionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [confirmEndOpen, setConfirmEndOpen] = useState(false);
   const [bidAnswerInput, setBidAnswerInput] = useState('');
+  const [matchedItems, setMatchedItems] = useState(1);
+  const actionInFlight = useRef(false);
+  const [busy, setBusy] = useState(false);
   const [qrMode, setQrMode] = useState<'host' | 'projector'>('host');
 
   const { connected, reconnecting } = useSessionSocket(code, 'host', (next) => {
     setSession(next);
-  });
+  }, authProfileId);
 
   useEffect(() => {
+    setError(null);
     apiFetch<{ session: GameSessionView }>(`/api/sessions/${code}?role=host`)
       .then((res) => setSession(res.session))
       .catch((err) => setError(err instanceof Error ? err.message : 'تعذر تحميل لوحة المشرف'));
-  }, [code]);
+  }, [code, authProfileId]);
 
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
+    if (actionInFlight.current || !session?.hostSecret) return;
+    actionInFlight.current = true;
+    setBusy(true);
+    setError(null);
     try {
       const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${code}/action`, {
         method: 'POST',
@@ -58,14 +68,19 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
       setSession(res.session);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر تنفيذ الإجراء');
+    } finally {
+      actionInFlight.current = false;
+      setBusy(false);
     }
   };
+
+  useEffect(() => { setMatchedItems(1); }, [session?.currentQuestion?.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      if (!session || session.phase === 'finished') return;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)) return;
+      if (!session || session.phase === 'finished' || e.repeat) return;
       if (e.code === 'Space') {
         e.preventDefault();
         if (session.phase === 'vs') {
@@ -75,7 +90,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
         }
       } else if (e.key === 'n' || e.key === 'N') {
         e.preventDefault();
-        act('next_question');
+        act(session.phase === 'round_summary' ? 'next_round' : 'next_question');
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
         if (!session.answerRevealed) act('reveal_answer');
@@ -83,7 +98,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [session?.code, session?.phase, session?.timerRunning, session?.answerRevealed]);
+  }, [session?.code, session?.phase, session?.timerRunning, session?.answerRevealed, Boolean(session?.hostSecret)]);
 
   const copyLink = (key: string, url: string) => {
     navigator.clipboard?.writeText(url).catch(() => {});
@@ -106,7 +121,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
     URL.revokeObjectURL(url);
   };
 
-  if (error) {
+  if (error && !session) {
     return (
       <div className="min-h-screen bg-[#09143A] text-slate-50 flex items-center justify-center p-6">
         <div className="max-w-md w-full rounded-2xl bg-[#101E52] border border-rose-400/30 p-6 text-center space-y-4">
@@ -127,6 +142,16 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
     );
   }
 
+  if (!session.hostSecret) {
+    return (
+      <div dir="rtl" className="min-h-screen bg-[#09143A] p-6 text-center text-white">
+        <p className="mb-4">سجّل الدخول بحساب المشرف للتحكم في هذه المباراة.</p>
+        <button type="button" onClick={onOpenAuth} className="rounded-xl bg-sky-400 p-3 font-bold text-slate-950">تسجيل الدخول</button>
+        <button type="button" onClick={onBack} className="mr-3 rounded-xl bg-white/10 p-3">عودة</button>
+      </div>
+    );
+  }
+
   const projectorUrl = `${window.location.origin}/?mode=projector&code=${session.code}`;
   const hostPhoneUrl = `${window.location.origin}/?mode=host&code=${session.code}`;
   const round = session.rounds[session.currentRoundIndex];
@@ -134,6 +159,19 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
   const q = session.currentQuestion;
   const secret = session.hostSecret;
   const winSummary = determineWinner(session.teams);
+  const inPlay = session.phase === 'playing' || session.phase === 'paused';
+  const canScore = inPlay && q && !session.answerRevealed &&
+    session.memoryPhase !== 'memorize' && !session.bidState;
+  const lastQuestion = session.currentQuestionIndexInRound + 1 >= (round?.questionsPerRound ?? 1);
+  const lastRound = session.currentRoundIndex + 1 >= session.rounds.length;
+  const primary = session.phase === 'vs' || session.phase === 'lobby'
+    ? { label: 'بدء المباراة', action: 'start_match' }
+    : session.phase === 'round_summary'
+    ? { label: 'ابدأ الجولة التالية', action: 'next_round' }
+    : inPlay
+    ? { label: !lastQuestion ? 'السؤال التالي' : lastRound ? 'إعلان النتيجة' : 'عرض نتيجة الجولة', action: 'next_question' }
+    : null;
+
   const accuracy =
     session.stats && session.stats.totalAnswered > 0
       ? Math.round((session.stats.totalCorrect / session.stats.totalAnswered) * 100)
@@ -193,6 +231,24 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
           </div>
         </div>
 
+        {error && <p role="alert" className="rounded-xl bg-rose-500/20 p-3 text-rose-100">{error}</p>}
+        {session.phase === 'round_summary' || session.phase === 'finished' ? (
+          <div className="rounded-xl bg-[#101E52] p-4 text-center">
+            <h2 className="text-lg font-black">{session.phase === 'finished'
+              ? winSummary.isTie ? 'تعادل' : `الفائز: ${session.teams[winSummary.winnerIndices[0]]?.name}`
+              : 'نتيجة الجولة'}</h2>
+            <p>{session.teams.map((team) => `${team.name}: ${team.points}`).join(' · ')}</p>
+          </div>
+        ) : null}
+        {primary && (
+          <div className="sticky top-0 z-20 rounded-xl bg-[#09143A] p-2">
+            <button type="button" disabled={busy} onClick={() => act(primary.action)}
+              className="w-full rounded-xl bg-sky-400 px-4 py-3 text-lg font-black text-slate-950 disabled:opacity-50">
+              {primary.label}
+            </button>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           {/* Left: Active Question, Secret Answer & Analytics */}
           <div className="lg:col-span-8 space-y-4">
@@ -213,38 +269,21 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {session.phase === 'vs' ? (
-                  <button
-                    type="button"
-                    onClick={() => act('start_match')}
-                    className="px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-sm inline-flex items-center gap-2"
-                  >
-                    <Play className="w-4 h-4 fill-current" />
-                    <span>بدء المباراة على الشاشة</span>
+                {inPlay && q && !session.answerRevealed && !session.bidState && session.memoryPhase !== 'memorize' && (
+                  <button type="button" disabled={busy} onClick={() => act(session.timerRunning ? 'pause_timer' : 'start_timer')}
+                    className="rounded-xl bg-white/10 px-4 py-3 text-sm font-bold">
+                    {session.timerRunning ? 'أوقف المؤقت' : 'شغّل المؤقت'}
                   </button>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => act(session.timerRunning ? 'pause_timer' : 'start_timer')}
-                      className="px-4 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-xs inline-flex items-center gap-1.5"
-                    >
-                      {session.timerRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                      <span>{session.timerRunning ? 'إيقاف المؤقت' : 'ابدأ / استأنف العد'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => act('reset_timer')}
-                      className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold inline-flex items-center gap-1.5"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      <span>إعادة الـ30ث</span>
-                    </button>
-                  </>
+                )}
+                {inPlay && q && !session.answerRevealed && !session.bidState && session.memoryPhase !== 'memorize' && (
+                  <button type="button" disabled={busy} onClick={() => act('reset_timer')}
+                    className="rounded-xl bg-white/10 px-3 py-2 text-xs font-bold">
+                    إعادة المؤقت
+                  </button>
                 )}
                 <button
                   type="button"
-                  disabled={!secret?.undoStackCount}
+                  disabled={busy || !secret?.undoStackCount}
                   onClick={() => act('undo')}
                   className="px-3.5 py-2.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/30 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-40"
                 >
@@ -254,7 +293,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
               </div>
             </div>
 
-            {session.exhaustedNotice?.exhausted && (
+            {session.exhaustedNotice?.exhausted && inPlay && (
               <div className="rounded-2xl bg-amber-500/15 border border-amber-400/40 p-5 space-y-3">
                 <p className="font-bold text-amber-200 text-sm">{session.exhaustedNotice.message}</p>
                 <div className="flex flex-wrap gap-2">
@@ -280,7 +319,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
             )}
 
             {/* Question + Secret Answer for Referee */}
-            {q && (
+            {q && inPlay && (
               <div className="rounded-2xl bg-[#101E52] border border-sky-400/25 p-5 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
                   <span>{q.category}</span>
@@ -311,7 +350,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
                   {secret?.explanation && <div className="text-xs text-slate-200">التوضيح: {secret.explanation}</div>}
                   {secret?.sourceExcerpt && (
                     <div className="text-xs text-sky-200 pt-1 border-t border-emerald-400/20">
-                      مرجع الدرس (صفحة {secret.sourcePage}): «{secret.sourceExcerpt}»
+                      {secret.sourcePage ? `صفحة ${secret.sourcePage}` : 'المصدر'}: «{secret.sourceExcerpt}»
                     </div>
                   )}
                 </div>
@@ -436,13 +475,23 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
                   </div>
                 )}
 
-                {/* Referee Action Buttons */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {canScore && q.roundType === 'list_multiple' && (
+                  <label className="flex items-center gap-2 text-sm">
+                    عدد الإجابات الصحيحة
+                    <select className="rounded bg-[#09143A] p-2" value={matchedItems} onChange={(e) => setMatchedItems(Number(e.target.value))}>
+                      {Array.from({ length: Math.min(secret.requiredCount ?? 3, secret.acceptableAnswers.length) }, (_, index) => (
+                        <option key={index} value={index + 1}>{index + 1}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {canScore && <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {session.teams.map((t) => (
                     <button
                       key={t.index}
                       type="button"
-                      onClick={() => act('award_team', { teamIndex: t.index })}
+                      disabled={busy}
+                      onClick={() => act('award_team', { teamIndex: t.index, matchedListCount: q.roundType === 'list_multiple' ? matchedItems : undefined })}
                       className="py-3 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap truncate"
                     >
                       <Check className="w-4 h-4 shrink-0" />
@@ -465,7 +514,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
                     <Eye className="w-4 h-4" />
                     <span>إظهار للجمهور</span>
                   </button>
-                </div>
+                </div>}
 
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10">
                   <div className="flex flex-wrap gap-2">
@@ -478,14 +527,12 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
                         كشف الدليل التالي
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => act('skip_question')}
-                      className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold inline-flex items-center gap-1"
-                    >
-                      <SkipForward className="w-4 h-4" />
-                      <span>تخطي السؤال</span>
-                    </button>
+                    {!session.settings.hostControlled && (
+                      <button type="button" onClick={() => act('skip_question')}
+                        className="px-3 py-2 rounded-xl bg-white/10 text-xs font-bold inline-flex items-center gap-1">
+                        <SkipForward className="w-4 h-4" /> تخطي السؤال
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => act('exclude_question', { reason: 'استبعاد بواسطة المشرف' })}
@@ -496,19 +543,13 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
                     </button>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => act('next_question')}
-                    className="px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-xs"
-                  >
-                    السؤال / الجولة التالية
-                  </button>
                 </div>
               </div>
             )}
 
-            {/* Live Match Analytics & Export + Score Audit Log */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <details className="rounded-2xl bg-[#101E52] p-4">
+              <summary className="cursor-pointer font-bold">سجل النقاط والتصدير</summary>
+              <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="rounded-2xl bg-[#101E52] border border-white/10 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-extrabold text-white">تحليلات المباراة والتصدير</h2>
@@ -578,7 +619,8 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
                   </div>
                 )}
               </div>
-            </div>
+              </div>
+            </details>
           </div>
 
           {/* Right: Score Adjustments, Phone Buzzers, Participant Swap, QR & Objections */}

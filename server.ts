@@ -5,12 +5,18 @@ import path from 'node:path';
 import { createAppAndHub } from './src/server/appFactory';
 import { createDatabase } from './src/server/db';
 import { seedDatabase } from './src/server/seed';
+import { importGeminiBank } from './src/server/importGeminiBank';
+import geminiBank from './data/imports/questions_bank_5000.json';
 
 const PORT = Number(process.env.PORT || 3000);
 const isProd = process.env.NODE_ENV === 'production';
 
 const db = createDatabase();
 seedDatabase(db);
+const importReport = importGeminiBank(db, geminiBank);
+if (importReport.accepted || importReport.rejected) {
+  console.log(`Gemini bank: ${importReport.accepted} imported, ${importReport.duplicateCount} existing, ${importReport.rejected} rejected.`);
+}
 
 const { app, hub } = createAppAndHub(db);
 

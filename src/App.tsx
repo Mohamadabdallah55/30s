@@ -186,8 +186,7 @@ export default function App() {
   };
 
   const handleOpenProjector = (code: string) => {
-    setSessionCode(code);
-    navigateTo('projector');
+    window.open(`/?mode=projector&code=${encodeURIComponent(code)}`, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -214,6 +213,7 @@ export default function App() {
           user={user}
           onBack={goBackOneStep}
           onSessionCreated={handleSessionCreated}
+          onOpenAuth={() => setAuthOpen(true)}
         />
       )}
 
@@ -237,6 +237,8 @@ export default function App() {
           code={sessionCode}
           onBack={goBackOneStep}
           onOpenProjector={handleOpenProjector}
+          onOpenAuth={() => setAuthOpen(true)}
+          authProfileId={user?.id}
         />
       )}
 
@@ -262,7 +264,7 @@ export default function App() {
           onLaunchSession={(session) => {
             setActiveSession(session);
             setSessionCode(session.code);
-            navigateTo('arena');
+            navigateTo('host');
           }}
           onOpenHostPanel={(session) => {
             setActiveSession(session);

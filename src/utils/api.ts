@@ -41,7 +41,8 @@ export async function apiFetch<T = unknown>(url: string, init: RequestInit = {})
 export function useSessionSocket(
   code: string | null,
   role: 'host' | 'audience' | 'player',
-  onUpdate: (session: GameSessionView) => void
+  onUpdate: (session: GameSessionView) => void,
+  authProfileId?: string
 ) {
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -96,7 +97,7 @@ export function useSessionSocket(
       if (retryTimer) clearTimeout(retryTimer);
       ws?.close();
     };
-  }, [code, role]);
+  }, [code, role, authProfileId]);
 
   return { connected, reconnecting };
 }

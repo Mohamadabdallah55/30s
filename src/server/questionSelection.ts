@@ -6,6 +6,7 @@ import {
   isAgeCompatible,
   levelToDifficulty,
   normalizeAgeGroup,
+  normalizeArabicText,
 } from '../shared/gameRules';
 import { arabicTextSimilarity } from '../shared/questionSchema';
 import type { AgeGroup, Difficulty, DifficultyLevel, QuestionRecord, RoundType } from '../shared/types';
@@ -48,6 +49,7 @@ interface QuestionRow {
   options_json: string;
   acceptable_answers_json: string;
   correct_index: number | null;
+  required_count?: number | null;
   explanation: string | null;
   clues_json: string;
   order_criteria: string | null;
@@ -82,6 +84,7 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
     options: JSON.parse(row.options_json || '[]'),
     acceptableAnswers: JSON.parse(row.acceptable_answers_json || '[]'),
     correctIndex: row.correct_index,
+    requiredCount: row.required_count,
     explanation: row.explanation ?? '',
     clues: JSON.parse(row.clues_json || '[]'),
     orderCriteria: row.order_criteria ?? '',
@@ -95,6 +98,11 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
     confidenceScore: row.confidence_score,
     createdAt: row.created_at,
   };
+}
+
+function bidItemCount(row: QuestionRow): number {
+  const answers = JSON.parse(row.acceptable_answers_json || '[]') as string[];
+  return new Set(answers.map(normalizeArabicText).filter(Boolean)).size;
 }
 
 const TIMED_SPRINT_ROUNDS = new Set<RoundType>(['rapid_fire', 'true_false', 'buzzer']);
@@ -121,6 +129,7 @@ export function getBankAvailability(
     difficulty: Difficulty | 'mixed';
     category?: string;
     categories?: string[];
+    exactRounds?: boolean;
     participantProfileIds?: string[];
   }
 ): {
@@ -187,20 +196,21 @@ export function getBankAvailability(
     ['rapid_fire', 'fill_blank', 'multiple_choice', 'buzzer', 'golden'].includes(q.round_type) &&
     Number(q.unsuitable_for_timed || 0) === 0
   );
-  if (byRoundType.golden.total === 0 && compatPool.length > 0) {
+  if (!params.exactRounds && byRoundType.golden.total === 0 && compatPool.length > 0) {
     byRoundType.golden = {
       total: compatPool.length,
       unseen: compatPool.filter((q) => !exposedSet.has(q.id)).length,
     };
   }
-  if (byRoundType.buzzer.total === 0 && compatPool.length > 0) {
+  if (!params.exactRounds && byRoundType.buzzer.total === 0 && compatPool.length > 0) {
     byRoundType.buzzer = {
       total: compatPool.length,
       unseen: compatPool.filter((q) => !exposedSet.has(q.id)).length,
     };
   }
-  if (byRoundType.bid_challenge.total === 0 && byRoundType.list_multiple.total > 0) {
-    byRoundType.bid_challenge = { ...byRoundType.list_multiple };
+  if (!params.exactRounds && byRoundType.bid_challenge.total === 0) {
+    const eligible = matching.filter((question) => question.round_type === 'list_multiple' && bidItemCount(question) >= 3);
+    byRoundType.bid_challenge = { total: eligible.length, unseen: eligible.filter((q) => !exposedSet.has(q.id)).length };
   }
 
   return {
@@ -287,7 +297,7 @@ export function selectNextQuestionTx(
         if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
         if (req.difficulty !== 'mixed' && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
         if (categoryList && !categoryList.includes(q.category)) return false;
-        return q.round_type === 'list_multiple';
+        return q.round_type === 'list_multiple' && bidItemCount(q) >= 3;
       });
     }
 

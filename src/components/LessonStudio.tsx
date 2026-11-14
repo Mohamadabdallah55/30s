@@ -463,6 +463,7 @@ export function LessonStudio({
           { name: team2Name.trim() || 'فريق الرواد', color: '#F59E0B' },
         ],
         settings: {
+          hostControlled: true,
           defaultTimerSec: matchTimerSec,
         },
       }),

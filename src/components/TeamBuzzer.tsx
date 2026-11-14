@@ -134,6 +134,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     session.buzzedTeamIndex !== null ? session.teams[session.buzzedTeamIndex]?.name || 'فريق آخر' : '';
 
   const canBuzz =
+    (!session.settings.hostControlled || (session.timerRunning && q?.roundType === 'buzzer')) &&
     session.phase === 'playing' &&
     !session.answerRevealed &&
     session.timerRemainingSec > 0 &&
@@ -142,6 +143,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     session.buzzedTeamIndex === null;
 
   const canAnswerOnPhone =
+    !session.settings.hostControlled &&
     session.phase === 'playing' &&
     !session.answerRevealed &&
     session.timerRemainingSec > 0 &&
@@ -239,7 +241,9 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
             )}
 
             {/* Bid Challenge (مين يزوّد) Phone Controls OR Giant Tactile Buzzer */}
-            {q?.roundType === 'bid_challenge' && session.bidState && !session.answerRevealed ? (
+            {session.settings.hostControlled && q?.roundType !== 'buzzer' ? (
+              <p className="rounded-xl bg-[#101E52] p-4 text-center text-slate-200">تابع السؤال على شاشة الجمهور وأجب شفهيًا للمشرف.</p>
+            ) : q?.roundType === 'bid_challenge' && session.bidState && !session.answerRevealed ? (
               <div className="rounded-2xl bg-[#09143A] border border-amber-400/35 p-4 space-y-3">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-bold text-amber-300">
