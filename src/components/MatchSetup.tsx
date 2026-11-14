@@ -41,6 +41,9 @@ interface MatchSetupProps {
   onSessionCreated: (session: GameSessionView, launchMode: 'arena' | 'host_and_projector') => void;
 }
 
+const VARIETY_BANK_ID = 'bank-import-thirty-seconds-v1';
+const ORIGINAL_BANK_ID = 'bank-general-mosque';
+
 const TEAM_COLORS = [
   { label: 'سماوي', value: '#38BDF8' },
   { label: 'ذهبي', value: '#F59E0B' },
@@ -67,9 +70,8 @@ export function MatchSetup({
   onOpenAuth,
 }: MatchSetupProps) {
   const [banks, setBanks] = useState<QuestionBank[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
   const [activePresetId, setActivePresetId] = useState<string>(initialLessonId ? 'lesson' : 'classic');
-  const [bankId, setBankId] = useState(initialBankId || 'bank-general-mosque');
+  const [bankId, setBankId] = useState(initialBankId ?? VARIETY_BANK_ID);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [ageGroup, setAgeGroup] = useState<AgeGroup>(user?.ageGroup || 'family');
   const [difficulty, setDifficulty] = useState<Difficulty | 'mixed'>('mixed');
@@ -97,6 +99,9 @@ export function MatchSetup({
   const [buzzerWrongRule, setBuzzerWrongRule] = useState<'pass_to_other' | 'penalty_and_pass'>('pass_to_other');
   const [launchMode, setLaunchMode] = useState<'arena' | 'host_and_projector'>('host_and_projector');
 
+  const varietyBank = banks.find((bank) => bank.id === VARIETY_BANK_ID && (bank.publishedCount ?? 0) > 0);
+  const activeBank = banks.find((bank) => bank.id === bankId);
+  const defaultBankId = initialBankId ?? varietyBank?.id ?? ORIGINAL_BANK_ID;
   const importedBank = bankId.startsWith('bank-import-');
   const [availability, setAvailability] = useState<{
     totalPublishedInFilter: number;
@@ -109,18 +114,18 @@ export function MatchSetup({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch<{ banks: QuestionBank[]; categories: string[] }>('/api/banks')
-      .then((res) => {
-        setBanks(res.banks);
-        setCategories(res.categories);
-        if (initialBankId) setBankId(initialBankId);
+    let current = true;
+    apiFetch<{ banks: QuestionBank[] }>('/api/banks')
+      .then(({ banks: loadedBanks }) => {
+        if (!current) return;
+        setBanks(loadedBanks);
+        const selected = initialBankId ?? (loadedBanks.some((bank) => bank.id === VARIETY_BANK_ID && (bank.publishedCount ?? 0) > 0)
+          ? VARIETY_BANK_ID : ORIGINAL_BANK_ID);
+        setBankId(selected);
       })
       .catch(() => {});
+    return () => { current = false; };
   }, [initialBankId]);
-
-  useEffect(() => {
-    if (importedBank) setSelectedRounds([]);
-  }, [bankId, importedBank]);
 
   useEffect(() => {
     const qs = new URLSearchParams({
@@ -145,14 +150,14 @@ export function MatchSetup({
         setAvailability(res);
         if (importedBank) {
           setSelectedRounds((previous) => {
-            const viable = previous.filter((type) => type !== 'golden' && res.byRoundType[type]?.unseen > 0);
+            const viable = previous.filter((type) => (res.byRoundType[type === 'golden' ? goldenTargetType : type]?.unseen ?? 0) > 0);
             return viable.length ? viable : ALL_ROUND_TYPES.filter((type) => type !== 'golden' && res.byRoundType[type]?.unseen > 0);
           });
         }
       })
       .catch(() => {});
     return () => { current = false; };
-  }, [bankId, ageGroup, difficulty, adaptiveDifficulty, selectedCategories, user?.id, importedBank]);
+  }, [bankId, ageGroup, difficulty, adaptiveDifficulty, selectedCategories, user?.id, importedBank, goldenTargetType]);
 
   const applyPreset = (preset: MatchPreset) => {
     setActivePresetId(preset.id);
@@ -163,10 +168,12 @@ export function MatchSetup({
     setTimerSec(preset.timerSec);
     setSelectedRounds(preset.roundTypes);
     if (preset.sourcePreference === 'lesson') {
+      setSelectedCategories([]);
       const lessonBank = banks.find((b) => b.sourceType === 'lesson' && (b.publishedCount ?? 0) > 0);
       if (lessonBank) setBankId(lessonBank.id);
     } else if (preset.id !== 'custom') {
-      setBankId(initialBankId || 'bank-general-mosque');
+      setBankId(defaultBankId);
+      setSelectedCategories([]);
     }
   };
 
@@ -555,6 +562,18 @@ export function MatchSetup({
                       </option>
                     ))}
                   </select>
+                  {activeBank && (
+                    <p className="mt-2 text-xs text-slate-300">
+                      {activeBank.publishedCount ?? 0} سؤال جاهز في هذا البنك
+                      {(activeBank.needsReviewCount ?? 0) > 0 && ` · ${activeBank.needsReviewCount} بانتظار المراجعة`}
+                    </p>
+                  )}
+                  {varietyBank && bankId !== VARIETY_BANK_ID && (
+                    <button type="button" className="mt-2 text-xs font-bold text-sky-300"
+                      onClick={() => { setBankId(VARIETY_BANK_ID); setSelectedCategories([]); }}>
+                      استخدم بنك الأسئلة المتنوع ({varietyBank.publishedCount})
+                    </button>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
@@ -583,7 +602,7 @@ export function MatchSetup({
                     >
                       الكل
                     </button>
-                    {(importedBank ? Object.keys(availability?.byCategory || {}) : Array.from(new Set([...Object.keys(availability?.byCategory || {}), ...categories]))).map((c) => {
+                    {Object.keys(availability?.byCategory ?? {}).map((c) => {
                       const catStats = availability?.byCategory?.[c];
                       const active = selectedCategories.includes(c);
                       const count = catStats?.total;

@@ -150,7 +150,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           title: 'تحدي الـ30 ثانية — مسجد ابن تيمية',
-          bankId: 'bank-general-mosque',
+          bankId: 'bank-import-thirty-seconds-v1',
           ageGroup: 'family',
           difficulty: 'mixed',
           category: 'الكل',
