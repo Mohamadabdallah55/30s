@@ -97,6 +97,10 @@ export function coerceRoundType(raw: string): RoundType | null {
     'الذاكرة': 'memory',
     'المواجهة بالجرس': 'buzzer',
     'الجولة الذهبية': 'golden',
+    'مين يزود': 'bid_challenge',
+    'مين يزوّد': 'bid_challenge',
+    'مزايدة': 'bid_challenge',
+    'bid': 'bid_challenge',
   };
   return aliases[val] ?? null;
 }

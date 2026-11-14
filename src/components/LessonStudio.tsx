@@ -2,19 +2,26 @@ import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
+  Bell,
   Check,
   CheckCircle2,
+  Copy,
   Download,
   Edit3,
   FileText,
+  MonitorPlay,
   PauseCircle,
   Play,
+  QrCode,
   RefreshCw,
+  Search,
   ShieldAlert,
+  Smartphone,
   Sparkles,
   Square,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import {
   AGE_GROUP_LABELS,
@@ -25,23 +32,39 @@ import {
 } from '../shared/gameRules';
 import type {
   AgeGroup,
+  AllowedAiModel,
   Difficulty,
   GameSessionView,
   LessonBatchSummary,
   ProfilePublic,
   QuestionRecord,
+  RoundConfig,
   RoundType,
 } from '../shared/types';
-import { apiFetch, getAuthToken } from '../utils/api';
+import { apiFetch, getAuthToken, useSessionSocket } from '../utils/api';
+import { SessionQrBadge } from './BrandEmblem';
 
 interface LessonStudioProps {
   user: ProfilePublic | null;
+  initialLessonId?: string | null;
+  onSelectLessonId?: (lessonId: string | null) => void;
   onBack: () => void;
   onOpenAuth: () => void;
   onLaunchSession: (session: GameSessionView) => void;
+  onOpenHostPanel?: (session: GameSessionView) => void;
+  onOpenProjector?: (session: GameSessionView) => void;
 }
 
-export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: LessonStudioProps) {
+export function LessonStudio({
+  user,
+  initialLessonId,
+  onSelectLessonId,
+  onBack,
+  onOpenAuth,
+  onLaunchSession,
+  onOpenHostPanel,
+  onOpenProjector,
+}: LessonStudioProps) {
   const [lessons, setLessons] = useState<LessonBatchSummary[]>([]);
   const [selectedLesson, setSelectedLesson] = useState<LessonBatchSummary | null>(null);
   const [questions, setQuestions] = useState<QuestionRecord[]>([]);
@@ -70,6 +93,37 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
   const [editPrompt, setEditPrompt] = useState('');
   const [editAnswer, setEditAnswer] = useState('');
   const [autoStartSec, setAutoStartSec] = useState<number | null>(null);
+  const [aiModel, setAiModel] = useState<AllowedAiModel>('gemini-4-hydrogen');
+  const [allowedAiModels, setAllowedAiModels] = useState<
+    Array<{ id: AllowedAiModel; labelAr: string; noteAr?: string }>
+  >([
+    {
+      id: 'gemini-4-hydrogen',
+      labelAr: 'gemini-4-hydrogen — متوازن ودقيق لتحليل PDF العربي (موصى به)',
+    },
+    {
+      id: 'gemini-3.1-flash-lite',
+      labelAr: 'gemini-3.1-flash-lite — سريع وخفيف لتقليل استهلاك الحصة',
+    },
+  ]);
+  const [freeTierNotice, setFreeTierNotice] = useState<string>(
+    'يستخدم استوديو PDF حصرياً نماذج Gemini Flash ضمن الحصة المجانية (Free Tier) بحدود طلبات يومية ولحظية ليست بلا حدود.'
+  );
+  const [savingModel, setSavingModel] = useState(false);
+
+  // Pre-start QR Remote Control & Quick Match Config
+  const [team1Name, setTeam1Name] = useState('فريق النخبة');
+  const [team2Name, setTeam2Name] = useState('فريق الرواد');
+  const [matchTimerSec, setMatchTimerSec] = useState<number>(30);
+  const [preparedSession, setPreparedSession] = useState<GameSessionView | null>(null);
+  const [preparingQr, setPreparingQr] = useState(false);
+  const [autoOpenProjectorOnStart, setAutoOpenProjectorOnStart] = useState(true);
+  const [copiedLinkKey, setCopiedLinkKey] = useState<string | null>(null);
+  const [qrViewTab, setQrViewTab] = useState<'host' | 'buzzers'>('host');
+
+  // Generated questions filter
+  const [questionStatusFilter, setQuestionStatusFilter] = useState<'all' | 'published' | 'needs_review'>('all');
+  const [questionSearch, setQuestionSearch] = useState('');
 
   const isStaff = user?.role === 'admin' || user?.role === 'teacher';
   const activeProcessingStages = new Set([
@@ -104,9 +158,73 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
     }
   };
 
+  const loadAiModelSetting = async () => {
+    if (!isStaff) return;
+    try {
+      const res = await apiFetch<{
+        model: AllowedAiModel;
+        allowedModels: Array<{ id: AllowedAiModel; labelAr: string; noteAr?: string } | AllowedAiModel>;
+        freeTierNoticeAr?: string;
+      }>('/api/settings/ai-model');
+      if (res.model) setAiModel(res.model);
+      if (res.allowedModels?.length) {
+        setAllowedAiModels(
+          res.allowedModels.map((item) =>
+            typeof item === 'string'
+              ? {
+                  id: item,
+                  labelAr:
+                    item === 'gemini-4-hydrogen'
+                      ? 'gemini-4-hydrogen — متوازن ودقيق لتحليل PDF العربي (موصى به)'
+                      : 'gemini-3.1-flash-lite — سريع وخفيف لتقليل استهلاك الحصة',
+                }
+              : item
+          )
+        );
+      }
+      if (res.freeTierNoticeAr) setFreeTierNotice(res.freeTierNoticeAr);
+    } catch {
+      // Ignore
+    }
+  };
+
   useEffect(() => {
     loadLessons();
+    loadAiModelSetting();
   }, [isStaff]);
+
+  useEffect(() => {
+    if (isStaff && initialLessonId && selectedLesson?.lessonId !== initialLessonId) {
+      openLessonDetail(initialLessonId);
+    }
+  }, [isStaff, initialLessonId]);
+
+  const { connected: qrSocketConnected } = useSessionSocket(
+    preparedSession?.code ?? null,
+    'host',
+    (updated) => {
+      setPreparedSession(updated);
+      if (autoOpenProjectorOnStart && updated.phase === 'playing' && onOpenProjector) {
+        onOpenProjector(updated);
+      }
+    }
+  );
+
+  const handleModelChange = async (nextModel: AllowedAiModel) => {
+    setSavingModel(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ model: AllowedAiModel }>('/api/settings/ai-model', {
+        method: 'PUT',
+        body: JSON.stringify({ model: nextModel }),
+      });
+      setAiModel(res.model);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر حفظ إعداد النموذج');
+    } finally {
+      setSavingModel(false);
+    }
+  };
 
   useEffect(() => {
     if (!selectedLesson || !isLessonBusy) return;
@@ -198,6 +316,8 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
       );
       setSelectedLesson(res.lesson);
       setQuestions(res.questions);
+      setPreparedSession(null);
+      onSelectLessonId?.(res.lesson.lessonId);
     } catch (err) {
       setError(sanitizeUserError(err instanceof Error ? err.message : 'تعذر تحميل تفاصيل الدرس'));
     }
@@ -317,32 +437,70 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
     }
   };
 
+  const createLessonSession = async (): Promise<GameSessionView | null> => {
+    if (!selectedLesson) return null;
+    const publishedRounds = Array.from(
+      new Set(questions.filter((q) => q.status === 'published').map((q) => q.roundType))
+    );
+    const chosenRounds: RoundType[] = publishedRounds.length > 0 ? publishedRounds : ['multiple_choice'];
+    const roundOverrides: Partial<Record<RoundType, Partial<RoundConfig>>> = {};
+    for (const rt of chosenRounds) {
+      roundOverrides[rt] = { durationSec: matchTimerSec };
+    }
+    const res = await apiFetch<{ session: GameSessionView }>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: `تحدي الدرس الذكي: ${selectedLesson.title}`,
+        bankId: selectedLesson.bankId,
+        lessonId: selectedLesson.lessonId,
+        ageGroup: selectedLesson.ageGroup,
+        difficulty: selectedLesson.difficulty,
+        category: 'الكل',
+        roundTypes: chosenRounds,
+        roundOverrides,
+        teams: [
+          { name: team1Name.trim() || 'فريق النخبة', color: '#38BDF8' },
+          { name: team2Name.trim() || 'فريق الرواد', color: '#F59E0B' },
+        ],
+        settings: {
+          defaultTimerSec: matchTimerSec,
+        },
+      }),
+    });
+    return res.session;
+  };
+
   const launchGameNow = async () => {
     if (!selectedLesson) return;
     try {
-      const publishedRounds = Array.from(
-        new Set(questions.filter((q) => q.status === 'published').map((q) => q.roundType))
-      );
-      const res = await apiFetch<{ session: GameSessionView }>('/api/sessions', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: `تحدي الدرس الذكي: ${selectedLesson.title}`,
-          bankId: selectedLesson.bankId,
-          lessonId: selectedLesson.lessonId,
-          ageGroup: selectedLesson.ageGroup,
-          difficulty: selectedLesson.difficulty,
-          category: 'الكل',
-          roundTypes: publishedRounds.length > 0 ? publishedRounds : ['multiple_choice'],
-          teams: [
-            { name: 'فريق النخبة', color: '#38BDF8' },
-            { name: 'فريق الرواد', color: '#F59E0B' },
-          ],
-        }),
-      });
-      onLaunchSession(res.session);
+      const session = preparedSession ?? (await createLessonSession());
+      if (session) onLaunchSession(session);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'يرجى اعتماد سؤال واحد منشور على الأقل قبل البدء');
     }
+  };
+
+  const prepareTeacherRemoteQr = async () => {
+    if (!selectedLesson) return;
+    setError(null);
+    setPreparingQr(true);
+    try {
+      const session = await createLessonSession();
+      if (session) {
+        setPreparedSession(session);
+        setQrViewTab('host');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'يرجى اعتماد سؤال واحد منشور على الأقل قبل تجهيز الجلسة');
+    } finally {
+      setPreparingQr(false);
+    }
+  };
+
+  const copyUrl = (key: string, text: string) => {
+    navigator.clipboard?.writeText(text).catch(() => {});
+    setCopiedLinkKey(key);
+    setTimeout(() => setCopiedLinkKey(null), 2000);
   };
 
   const saveEdit = async (qId: string) => {
@@ -460,11 +618,24 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
           </div>
           <button
             type="button"
-            onClick={onBack}
-            className="px-4 py-2.5 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-white/10 text-xs font-bold inline-flex items-center gap-1.5"
+            onClick={() => {
+              if (
+                typeof window !== 'undefined' &&
+                window.innerWidth < 1024 &&
+                selectedLesson
+              ) {
+                setSelectedLesson(null);
+                setQuestions([]);
+                setPreparedSession(null);
+                onSelectLessonId?.(null);
+                return;
+              }
+              onBack();
+            }}
+            className="px-4 py-2.5 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-white/10 text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
           >
             <ArrowRight className="w-4 h-4" />
-            <span>الرئيسية</span>
+            <span>عودة خطوة</span>
           </button>
         </div>
 
@@ -475,8 +646,36 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Upload & Saved Lessons Sidebar */}
+          {/* Upload, Free Tier Model Settings & Saved Lessons Sidebar */}
           <div className="lg:col-span-5 space-y-5">
+            <div className="rounded-2xl bg-[#101E52] border border-emerald-400/30 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-extrabold text-emerald-300">إعداد نموذج الحصة المجانية (Free Tier)</h2>
+                <span className="text-[11px] font-mono text-slate-200 bg-[#09143A] px-2 py-0.5 rounded-lg border border-white/10 whitespace-nowrap shrink-0" dir="ltr">
+                  {aiModel}
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">{freeTierNotice}</p>
+              <div>
+                <label htmlFor="ai-model-select" className="block text-xs font-bold text-slate-300 mb-1">
+                  نموذج Gemini Flash المعتمد (مجاني فقط)
+                </label>
+                <select
+                  id="ai-model-select"
+                  value={aiModel}
+                  disabled={savingModel}
+                  onChange={(e) => handleModelChange(e.target.value as AllowedAiModel)}
+                  className="w-full rounded-xl bg-[#09143A] border border-slate-600 px-3 py-2 text-xs font-bold text-white outline-none disabled:opacity-60"
+                >
+                  {allowedAiModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.labelAr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <form onSubmit={handleGenerate} className="rounded-2xl bg-[#101E52] border border-violet-400/30 p-5 space-y-4">
               <h2 className="text-base font-extrabold text-white flex items-center gap-2">
                 <Upload className="w-5 h-5 text-sky-400" />
@@ -524,7 +723,7 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div>
                   <label htmlFor="lesson-age" className="block text-xs font-bold text-slate-300 mb-1">
                     الفئة العمرية
@@ -713,6 +912,19 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                       >
                         <Download className="w-3.5 h-3.5" /> CSV
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedLesson(null);
+                          setQuestions([]);
+                          setPreparedSession(null);
+                          onSelectLessonId?.(null);
+                        }}
+                        aria-label="إغلاق تفاصيل الدرس"
+                        className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-bold inline-flex items-center gap-1"
+                      >
+                        <X className="w-3.5 h-3.5" /> إغلاق الدرس
+                      </button>
                     </div>
                   </div>
 
@@ -772,13 +984,39 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                       <span className="font-extrabold text-sky-300">
                         {selectedLesson.statusMessageAr ||
-                          `تم إنشاء ${questions.length} من أصل ${selectedLesson.requestedCount} سؤالًا`}
+                          `تم حفظ ${questions.length} من أصل ${selectedLesson.requestedCount} سؤالاً`}
                       </span>
                       <span className="font-bold text-slate-300 tabular-nums">
-                        {questions.length} / {selectedLesson.requestedCount} سؤال صالح
+                        {questions.length} / {selectedLesson.requestedCount} سؤال محفوظ
                         {selectedLesson.totalBatches > 0 &&
                           ` · الدفعات: ${selectedLesson.completedBatches}/${selectedLesson.totalBatches}`}
                       </span>
+                    </div>
+
+                    {/* Detailed Batch & Quota Telemetry Strip */}
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-[11px]">
+                      <div className="rounded-lg bg-[#101E52] border border-white/10 p-2">
+                        <div className="text-slate-400">المستلمة</div>
+                        <div className="font-black text-white tabular-nums mt-0.5">{selectedLesson.receivedCount}</div>
+                      </div>
+                      <div className="rounded-lg bg-[#101E52] border border-white/10 p-2">
+                        <div className="text-slate-400">المقبولة</div>
+                        <div className="font-black text-sky-300 tabular-nums mt-0.5">{selectedLesson.acceptedCount}</div>
+                      </div>
+                      <div className="rounded-lg bg-[#101E52] border border-white/10 p-2">
+                        <div className="text-slate-400">المحفوظة فعلياً</div>
+                        <div className="font-black text-emerald-300 tabular-nums mt-0.5">{questions.length}</div>
+                      </div>
+                      <div className="rounded-lg bg-[#101E52] border border-white/10 p-2">
+                        <div className="text-slate-400">دفعات فاشلة</div>
+                        <div className="font-black text-amber-300 tabular-nums mt-0.5">{selectedLesson.failedBatches}</div>
+                      </div>
+                      <div className="rounded-lg bg-[#101E52] border border-white/10 p-2">
+                        <div className="text-slate-400">النموذج</div>
+                        <div className="font-mono font-bold text-violet-200 truncate mt-0.5" dir="ltr">
+                          {selectedLesson.modelUsed || aiModel}
+                        </div>
+                      </div>
                     </div>
 
                     {(selectedLesson.cacheHit || selectedLesson.elapsedMs) && (
@@ -817,11 +1055,35 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                     </div>
 
                     {selectedLesson.errorMessage && (
-                      <div className="rounded-lg bg-amber-500/15 border border-amber-400/30 p-3 text-xs text-amber-100 flex items-start gap-2">
-                        <PauseCircle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
-                        <span>{sanitizeUserError(selectedLesson.errorMessage)}</span>
+                      <div
+                        className={`rounded-lg border p-3 text-xs flex items-start gap-2 ${
+                          selectedLesson.errorCategory === 'quota_exhausted'
+                            ? 'bg-rose-500/15 border-rose-400/40 text-rose-100'
+                            : 'bg-amber-500/15 border-amber-400/30 text-amber-100'
+                        }`}
+                      >
+                        <PauseCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div className="space-y-1">
+                          <div>{sanitizeUserError(selectedLesson.errorMessage)}</div>
+                          {selectedLesson.errorCategory === 'quota_exhausted' && (
+                            <div className="text-[11px] text-rose-200/90">
+                              ملاحظة الحصة المجانية: أُوقف الطلب الفوري تلقائياً لحماية حصتك. يمكنك تشغيل المسابقة فوراً بأي أسئلة معتمدة أعلاه أو المحاولة لاحقاً عند تجدد الحصة اليومية.
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
+
+                    {selectedLesson.fileAvailable === false &&
+                      !isLessonBusy &&
+                      questions.length < selectedLesson.requestedCount && (
+                        <div className="rounded-lg bg-rose-500/15 border border-rose-400/40 p-3 text-xs text-rose-100 flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-rose-300 shrink-0 mt-0.5" />
+                          <span>
+                            ملف PDF الأصلي غير متاح حالياً على القرص؛ يرجى إعادة رفع الملف من نموذج الرفع الجانبي لاستكمال التوليد أو تشغيل الأسئلة المحفوظة حالياً.
+                          </span>
+                        </div>
+                      )}
 
                     {selectedLesson.insufficientContentNote && (
                       <div className="rounded-lg bg-violet-500/15 border border-violet-400/30 p-3 text-xs text-violet-100 flex items-start gap-2">
@@ -843,6 +1105,7 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                       )}
 
                       {!isLessonBusy &&
+                        selectedLesson.fileAvailable !== false &&
                         (selectedLesson.failedBatchIndex !== null ||
                           selectedLesson.pipelineStage === 'batch_paused' ||
                           selectedLesson.pipelineStage === 'failed') && (
@@ -857,6 +1120,7 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                         )}
 
                       {!isLessonBusy &&
+                        selectedLesson.fileAvailable !== false &&
                         !selectedLesson.insufficientContentNote &&
                         (selectedLesson.pipelineStage === 'batch_paused' ||
                           selectedLesson.pipelineStage === 'cancelled' ||
@@ -942,6 +1206,53 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                     </div>
                   </div>
 
+                  {/* Quick Teams & Timer Customization before Launch */}
+                  <div className="rounded-xl bg-[#09143A] border border-white/10 p-3.5 space-y-3">
+                    <div className="text-xs font-extrabold text-sky-300">تخصيص سريع قبل بدء مسابقة الدرس</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      <div>
+                        <label htmlFor="lesson-team1" className="block text-[11px] font-bold text-slate-300 mb-1">
+                          الفريق الأول
+                        </label>
+                        <input
+                          id="lesson-team1"
+                          type="text"
+                          value={team1Name}
+                          onChange={(e) => setTeam1Name(e.target.value)}
+                          className="w-full rounded-lg bg-[#101E52] border border-slate-600 px-3 py-1.5 text-xs font-bold text-white outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="lesson-team2" className="block text-[11px] font-bold text-slate-300 mb-1">
+                          الفريق الثاني
+                        </label>
+                        <input
+                          id="lesson-team2"
+                          type="text"
+                          value={team2Name}
+                          onChange={(e) => setTeam2Name(e.target.value)}
+                          className="w-full rounded-lg bg-[#101E52] border border-slate-600 px-3 py-1.5 text-xs font-bold text-white outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="lesson-timer" className="block text-[11px] font-bold text-slate-300 mb-1">
+                          مدة السؤال
+                        </label>
+                        <select
+                          id="lesson-timer"
+                          value={matchTimerSec}
+                          onChange={(e) => setMatchTimerSec(Number(e.target.value))}
+                          className="w-full rounded-lg bg-[#101E52] border border-slate-600 px-2.5 py-1.5 text-xs font-bold text-white outline-none tabular-nums"
+                        >
+                          <option value={20}>20 ثانية</option>
+                          <option value={30}>30 ثانية (القياسي)</option>
+                          <option value={45}>45 ثانية</option>
+                          <option value={60}>60 ثانية</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Launch Bar */}
                   <div className="pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap gap-2">
@@ -982,30 +1293,238 @@ export function LessonStudio({ user, onBack, onOpenAuth, onLaunchSession }: Less
                         </button>
                       </div>
                     ) : (
-                      <button
-                        type="button"
-                        disabled={selectedLesson.publishedCount === 0}
-                        onClick={launchGameNow}
-                        className="px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-xs inline-flex items-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
-                      >
-                        <Play className="w-4 h-4 fill-current" />
-                        <span>
-                          {selectedLesson.publishedCount === 0
-                            ? 'اعتمد سؤالاً واحداً على الأقل للبدء'
-                            : `ابدأ الآن بالأسئلة المعتمدة (${selectedLesson.publishedCount})`}
-                        </span>
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={selectedLesson.publishedCount === 0 || preparingQr}
+                          onClick={prepareTeacherRemoteQr}
+                          className="px-4 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-200 font-black text-xs inline-flex items-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+                        >
+                          <QrCode className="w-4 h-4" />
+                          <span>
+                            {preparingQr ? 'جاري تجهيز QR...' : 'تحضير QR لتحكم الأستاذ من الجوال (قبل البدء)'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={selectedLesson.publishedCount === 0}
+                          onClick={launchGameNow}
+                          className="px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-xs inline-flex items-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+                        >
+                          <Play className="w-4 h-4 fill-current" />
+                          <span>
+                            {selectedLesson.publishedCount === 0
+                              ? 'اعتمد سؤالاً واحداً على الأقل للبدء'
+                              : `ابدأ الآن بالأسئلة المعتمدة (${selectedLesson.publishedCount})`}
+                          </span>
+                        </button>
+                      </div>
                     )}
                   </div>
+
+                  {/* Pre-Start Teacher Phone QR Remote Control Studio */}
+                  {preparedSession && (
+                    <div className="rounded-2xl bg-gradient-to-br from-[#09143A] to-[#0D1E54] border border-emerald-400/50 p-5 space-y-4 shadow-xl">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Smartphone className="w-5 h-5 text-emerald-300" />
+                          <div>
+                            <h3 className="text-sm font-black text-white">
+                              غرفة تحضير الأستاذ — تحكم من الجوال قبل بدء المسابقة
+                            </h3>
+                            <div className="text-[11px] text-slate-300 flex items-center gap-2">
+                              <span>
+                                رمز الجلسة:{' '}
+                                <strong className="font-mono text-amber-300 text-xs">{preparedSession.code}</strong>
+                              </span>
+                              <span>·</span>
+                              <span className={qrSocketConnected ? 'text-emerald-300 font-bold' : 'text-slate-400'}>
+                                {preparedSession.phase === 'playing'
+                                  ? 'تم بدء المسابقة من هاتف الأستاذ!'
+                                  : qrSocketConnected
+                                  ? 'متصل — بانتظار بدء الأستاذ من الجوال'
+                                  : 'جاهز للمسح والربط'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setPreparedSession(null)}
+                          aria-label="إغلاق لوحة QR"
+                          className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-slate-300"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2 p-1 rounded-xl bg-[#071030] w-fit">
+                        <button
+                          type="button"
+                          onClick={() => setQrViewTab('host')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 ${
+                            qrViewTab === 'host' ? 'bg-emerald-400 text-slate-950' : 'text-slate-300'
+                          }`}
+                        >
+                          <Smartphone className="w-3.5 h-3.5" />
+                          <span>QR تحكم الأستاذ (الجوال)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQrViewTab('buzzers')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 ${
+                            qrViewTab === 'buzzers' ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
+                          }`}
+                        >
+                          <Bell className="w-3.5 h-3.5" />
+                          <span>QR جرس الطلاب</span>
+                        </button>
+                      </div>
+
+                      {qrViewTab === 'host' ? (
+                        <div className="flex flex-col sm:flex-row items-center gap-5">
+                          <SessionQrBadge
+                            code={preparedSession.code}
+                            url={`${window.location.origin}/?mode=host&code=${preparedSession.code}`}
+                            size="lg"
+                          />
+                          <div className="flex-1 space-y-3 text-right">
+                            <p className="text-xs text-slate-200 leading-relaxed">
+                              امسح هذا الرمز بكاميرا هاتفك قبل البدء؛ ستفتح لديك لوحة التحكم الكاملة (زر بدء المباراة، كشف الإجابة، المؤقت، وتعديل النقاط) وتبقى شاشة القاعة للبروجكتر.
+                            </p>
+                            <label className="inline-flex items-center gap-2 text-xs text-emerald-200 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={autoOpenProjectorOnStart}
+                                onChange={(e) => setAutoOpenProjectorOnStart(e.target.checked)}
+                                className="rounded accent-emerald-400"
+                              />
+                              <span>افتح شاشة البروجكتر (16:9) تلقائياً فور ضغط «بدء المباراة» من الجوال</span>
+                            </label>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  copyUrl(
+                                    'host-qr',
+                                    `${window.location.origin}/?mode=host&code=${preparedSession.code}`
+                                  )
+                                }
+                                className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold inline-flex items-center gap-1.5"
+                              >
+                                {copiedLinkKey === 'host-qr' ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-300" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                                <span>{copiedLinkKey === 'host-qr' ? 'تم النسخ!' : 'نسخ رابط تحكم الجوال'}</span>
+                              </button>
+                              {onOpenProjector && (
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenProjector(preparedSession)}
+                                  className="px-4 py-2 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 text-xs font-black inline-flex items-center gap-1.5"
+                                >
+                                  <MonitorPlay className="w-3.5 h-3.5" />
+                                  <span>تشغيل شاشة البروجكتر الآن (16:9)</span>
+                                </button>
+                              )}
+                              {onOpenHostPanel && (
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenHostPanel(preparedSession)}
+                                  className="px-3.5 py-2 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-amber-400/35 text-amber-200 text-xs font-bold"
+                                >
+                                  فتح لوحة المشرف هنا
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          {preparedSession.teams.map((t) => {
+                            const buzzUrl = `${window.location.origin}/?mode=buzzer&code=${preparedSession.code}&team=${t.index}`;
+                            const key = `buzz-${t.index}`;
+                            return (
+                              <div
+                                key={t.index}
+                                className="rounded-xl bg-[#101E52] border border-white/10 p-3.5 flex flex-col items-center gap-2 text-center"
+                              >
+                                <div className="text-xs font-black text-white">جرس {t.name}</div>
+                                <SessionQrBadge code={preparedSession.code} url={buzzUrl} size="sm" />
+                                <button
+                                  type="button"
+                                  onClick={() => copyUrl(key, buzzUrl)}
+                                  className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] font-bold inline-flex items-center gap-1"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  <span>{copiedLinkKey === key ? 'تم النسخ!' : 'نسخ رابط الجرس'}</span>
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Generated Questions Review List */}
                 <div className="rounded-2xl bg-[#101E52] border border-white/10 p-5 space-y-3">
-                  <h3 className="text-base font-extrabold text-white">
-                    مراجعة الأسئلة المولّدة ({questions.length})
-                  </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-base font-extrabold text-white">
+                      مراجعة الأسئلة المولّدة ({questions.length})
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex gap-1 p-1 rounded-xl bg-[#09143A] text-xs font-bold">
+                        {(
+                          [
+                            ['all', 'الكل'],
+                            ['published', 'معتمد'],
+                            ['needs_review', 'للمراجعة'],
+                          ] as const
+                        ).map(([k, lbl]) => (
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={() => setQuestionStatusFilter(k)}
+                            className={`px-2.5 py-1 rounded-lg transition-colors ${
+                              questionStatusFilter === k ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
+                            }`}
+                          >
+                            {lbl}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={questionSearch}
+                          onChange={(e) => setQuestionSearch(e.target.value)}
+                          placeholder="بحث في الأسئلة..."
+                          className="rounded-xl bg-[#09143A] border border-white/10 pr-8 pl-3 py-1.5 text-xs text-white outline-none focus:border-sky-400 w-44"
+                        />
+                      </div>
+                    </div>
+                  </div>
                   <div className="space-y-3">
-                    {questions.map((q) => (
+                    {questions
+                      .filter((q) => {
+                        if (questionStatusFilter === 'published' && q.status !== 'published') return false;
+                        if (questionStatusFilter === 'needs_review' && q.status === 'published') return false;
+                        if (questionSearch.trim()) {
+                          const s = questionSearch.trim();
+                          return (
+                            q.prompt.includes(s) ||
+                            q.acceptableAnswers.some((a) => a.includes(s)) ||
+                            (q.sourceExcerpt || '').includes(s)
+                          );
+                        }
+                        return true;
+                      })
+                      .map((q) => (
                       <div key={q.id} className="rounded-xl bg-[#09143A] border border-white/10 p-4 space-y-2">
                         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                           <div className="flex items-center gap-2">

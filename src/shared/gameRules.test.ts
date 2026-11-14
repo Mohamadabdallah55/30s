@@ -8,10 +8,12 @@ import {
   evaluateAnswerMatch,
   isAgeCompatible,
   normalizeArabicText,
+  resolveBidChallengePoints,
 } from './gameRules';
+import { buildSessionMatrix } from './qr';
 
-test('ALL_ROUND_TYPES includes all 11 required round modes', () => {
-  assert.equal(ALL_ROUND_TYPES.length, 11);
+test('ALL_ROUND_TYPES includes all 12 required round modes including bid_challenge', () => {
+  assert.equal(ALL_ROUND_TYPES.length, 12);
   assert.ok(ALL_ROUND_TYPES.includes('rapid_fire'));
   assert.ok(ALL_ROUND_TYPES.includes('list_multiple'));
   assert.ok(ALL_ROUND_TYPES.includes('true_false'));
@@ -23,6 +25,7 @@ test('ALL_ROUND_TYPES includes all 11 required round modes', () => {
   assert.ok(ALL_ROUND_TYPES.includes('memory'));
   assert.ok(ALL_ROUND_TYPES.includes('buzzer'));
   assert.ok(ALL_ROUND_TYPES.includes('golden'));
+  assert.ok(ALL_ROUND_TYPES.includes('bid_challenge'));
 });
 
 test('normalizeArabicText removes tashkeel and normalizes hamza/taa marbuta/alef maqsura', () => {
@@ -150,4 +153,70 @@ test('determineWinner handles clear winner and ties', () => {
   ]);
   assert.equal(tie.isTie, true);
   assert.deepEqual(tie.winnerIndices, [0, 1]);
+});
+
+test('resolveBidChallengePoints awards 3 pts to successful bidder and 2 pts to opponent on failure', () => {
+  const success = resolveBidChallengePoints({
+    currentBid: 5,
+    bidderTeamIndex: 0,
+    acceptedCount: 5,
+    teamCount: 2,
+    multiplier: 1,
+  });
+  assert.equal(success.succeeded, true);
+  assert.equal(success.winnerTeamIndex, 0);
+  assert.equal(success.pointsAwarded, 3);
+
+  const failTwoTeams = resolveBidChallengePoints({
+    currentBid: 6,
+    bidderTeamIndex: 0,
+    acceptedCount: 4,
+    teamCount: 2,
+    multiplier: 1,
+  });
+  assert.equal(failTwoTeams.succeeded, false);
+  assert.equal(failTwoTeams.winnerTeamIndex, 1);
+  assert.equal(failTwoTeams.pointsAwarded, 2);
+
+  const failSolo = resolveBidChallengePoints({
+    currentBid: 6,
+    bidderTeamIndex: 0,
+    acceptedCount: 4,
+    teamCount: 1,
+    multiplier: 1,
+  });
+  assert.equal(failSolo.succeeded, false);
+  assert.equal(failSolo.pointsAwarded, 0);
+
+  const goldenWin = resolveBidChallengePoints({
+    currentBid: 4,
+    bidderTeamIndex: 1,
+    acceptedCount: 5,
+    teamCount: 2,
+    multiplier: 2,
+  });
+  assert.equal(goldenWin.winnerTeamIndex, 1);
+  assert.equal(goldenWin.pointsAwarded, 6);
+});
+
+test('buildSessionMatrix generates a real scannable ISO QR matrix with 3 finder patterns', () => {
+  const urlA = 'https://mosque.example.com/?mode=host&code=ABC123';
+  const urlB = 'https://mosque.example.com/?mode=host&code=XYZ789';
+  const matA = buildSessionMatrix(urlA);
+  const matB = buildSessionMatrix(urlB);
+
+  const n = matA.length;
+  assert.ok(n >= 25, `Expected QR version >= 2 for full URL, got ${n}x${n}`);
+  assert.equal(matA[0].length, n);
+  // Top-left 7x7 finder corners + center
+  assert.equal(matA[0][0], true);
+  assert.equal(matA[0][6], true);
+  assert.equal(matA[6][0], true);
+  assert.equal(matA[3][3], true);
+  assert.equal(matA[1][1], false);
+  // Top-right & bottom-left finder centers
+  assert.equal(matA[3][n - 4], true);
+  assert.equal(matA[n - 4][3], true);
+  // Different URLs produce different matrices
+  assert.notDeepEqual(matA, matB);
 });

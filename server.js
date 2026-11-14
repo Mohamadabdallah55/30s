@@ -141,6 +141,17 @@ var ROUND_RULES = {
     multiplier: 2,
     multiQuestionWithinTimer: false,
     questionsPerRound: 3
+  },
+  bid_challenge: {
+    type: "bid_challenge",
+    nameAr: "\u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F",
+    shortDescAr: "\u0645\u0632\u0627\u064A\u062F\u0629 \u0639\u062F\u062F\u064A\u0629 \u0628\u064A\u0646 \u0627\u0644\u0641\u0631\u064A\u0642\u064A\u0646 \u062B\u0645 \u062A\u062D\u062F\u064A \u0630\u0643\u0631 \u0627\u0644\u0625\u062C\u0627\u0628\u0627\u062A \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629",
+    rulesBulletAr: "\u064A\u0631\u0641\u0639 \u0627\u0644\u0641\u0631\u064A\u0642\u0627\u0646 \u0627\u0644\u0633\u0642\u0641 \u0628\u0627\u0644\u0639\u062F\u062F\u061B \u0639\u0646\u062F \u0627\u0644\u062A\u062D\u062F\u064A \u064A\u062D\u0635\u0644 \u0627\u0644\u0641\u0627\u0626\u0632 \u0628\u0627\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u0639\u0644\u0649 30 \u062B\u0627\u0646\u064A\u0629: \u0625\u0630\u0627 \u062D\u0642\u0642 \u0627\u0644\u0639\u062F\u062F \u0643\u0633\u0628 3 \u0646\u0642\u0627\u0637\u060C \u0648\u0625\u0644\u0627 \u0643\u0633\u0628 \u0627\u0644\u0645\u0646\u0627\u0641\u0633 \u0646\u0642\u0637\u062A\u064A\u0646 (\u0644\u0627 \u0646\u0642\u0627\u0637 \u0644\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u0646\u0641\u0633\u0647\u0627).",
+    defaultDurationSec: 30,
+    basePoints: 3,
+    multiplier: 1,
+    multiQuestionWithinTimer: false,
+    questionsPerRound: 2
   }
 };
 var ALL_ROUND_TYPES = Object.keys(ROUND_RULES);
@@ -206,6 +217,23 @@ function calculateQuestionPoints(params) {
     base = Math.min(cap, Math.max(1, matchedListCount));
   }
   return Math.max(1, Math.round(base * Math.max(1, round.multiplier)));
+}
+function resolveBidChallengePoints(params) {
+  const mult = Math.max(1, params.multiplier ?? 1);
+  const succeeded = params.acceptedCount >= Math.max(1, params.currentBid);
+  if (succeeded) {
+    return {
+      succeeded: true,
+      winnerTeamIndex: params.bidderTeamIndex,
+      pointsAwarded: 3 * mult
+    };
+  }
+  const opponentIndex = params.teamCount > 1 ? params.bidderTeamIndex === 0 ? 1 : 0 : params.bidderTeamIndex;
+  return {
+    succeeded: false,
+    winnerTeamIndex: opponentIndex,
+    pointsAwarded: params.teamCount > 1 ? 2 * mult : 0
+  };
 }
 function evaluateAnswerMatch(question, submitted) {
   if (question.roundType === "multiple_choice" || question.roundType === "true_false" || question.roundType === "odd_one_out") {
@@ -332,7 +360,11 @@ function coerceRoundType(raw) {
     "order": "order_items",
     "\u0627\u0644\u0630\u0627\u0643\u0631\u0629": "memory",
     "\u0627\u0644\u0645\u0648\u0627\u062C\u0647\u0629 \u0628\u0627\u0644\u062C\u0631\u0633": "buzzer",
-    "\u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u0630\u0647\u0628\u064A\u0629": "golden"
+    "\u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u0630\u0647\u0628\u064A\u0629": "golden",
+    "\u0645\u064A\u0646 \u064A\u0632\u0648\u062F": "bid_challenge",
+    "\u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F": "bid_challenge",
+    "\u0645\u0632\u0627\u064A\u062F\u0629": "bid_challenge",
+    "bid": "bid_challenge"
   };
   return aliases[val] ?? null;
 }
@@ -603,6 +635,14 @@ function rowToQuestionRecord(row) {
   };
 }
 var TIMED_SPRINT_ROUNDS = /* @__PURE__ */ new Set(["rapid_fire", "true_false", "buzzer"]);
+function normalizeCategoryFilter(category, categories) {
+  const cleaned = (categories ?? []).map((c) => c.trim()).filter((c) => c && c !== "\u0627\u0644\u0643\u0644");
+  if (cleaned.length > 0) return Array.from(new Set(cleaned));
+  if (category && category.trim() && category.trim() !== "\u0627\u0644\u0643\u0644") {
+    return [category.trim()];
+  }
+  return null;
+}
 function getBankAvailability(db2, params) {
   const allPublished = db2.prepare(`SELECT * FROM questions WHERE bank_id = ? AND status = 'published'`).all(params.bankId);
   const permanentIds = Array.from(
@@ -617,13 +657,19 @@ function getBankAvailability(db2, params) {
     ).all(params.bankId, ...permanentIds);
     for (const r of rows) exposedSet.add(r.question_id);
   }
-  const categoryFilter = params.category && params.category !== "\u0627\u0644\u0643\u0644" ? params.category : null;
-  const matching = allPublished.filter((q) => {
+  const baseMatching = allPublished.filter((q) => {
     if (!isAgeCompatible(q.age_group, params.ageGroup)) return false;
     if (params.difficulty !== "mixed" && q.difficulty !== params.difficulty) return false;
-    if (categoryFilter && q.category !== categoryFilter) return false;
     return true;
   });
+  const byCategory = {};
+  for (const q of baseMatching) {
+    if (!byCategory[q.category]) byCategory[q.category] = { total: 0, unseen: 0 };
+    byCategory[q.category].total += 1;
+    if (!exposedSet.has(q.id)) byCategory[q.category].unseen += 1;
+  }
+  const categoryList = normalizeCategoryFilter(params.category, params.categories);
+  const matching = categoryList ? baseMatching.filter((q) => categoryList.includes(q.category)) : baseMatching;
   const byRoundType = {};
   for (const rt of ALL_ROUND_TYPES) {
     byRoundType[rt] = { total: 0, unseen: 0 };
@@ -653,10 +699,14 @@ function getBankAvailability(db2, params) {
       unseen: compatPool.filter((q) => !exposedSet.has(q.id)).length
     };
   }
+  if (byRoundType.bid_challenge.total === 0 && byRoundType.list_multiple.total > 0) {
+    byRoundType.bid_challenge = { ...byRoundType.list_multiple };
+  }
   return {
     totalPublishedInFilter: matching.length,
     unseenInFilter: unseenTotal,
-    byRoundType
+    byRoundType,
+    byCategory
   };
 }
 function selectNextQuestionTx(db2, req) {
@@ -687,13 +737,13 @@ function selectNextQuestionTx(db2, req) {
       }
     }
     const availableCategories = Array.from(availableCategorySet);
-    const categoryFilter = req.category && req.category !== "\u0627\u0644\u0643\u0644" ? req.category : null;
+    const categoryList = normalizeCategoryFilter(req.category, req.categories);
     const disallowUntimed = TIMED_SPRINT_ROUNDS.has(effectiveRoundType);
     let candidates = allPublished.filter((q) => {
       if (exposedSet.has(q.id)) return false;
       if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
       if (req.difficulty !== "mixed" && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
-      if (categoryFilter && q.category !== categoryFilter) return false;
+      if (categoryList && !categoryList.includes(q.category)) return false;
       if (disallowUntimed && Number(q.unsuitable_for_timed || 0) === 1) return false;
       return q.round_type === effectiveRoundType;
     });
@@ -703,18 +753,27 @@ function selectNextQuestionTx(db2, req) {
         if (exposedSet.has(q.id)) return false;
         if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
         if (req.difficulty !== "mixed" && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
-        if (categoryFilter && q.category !== categoryFilter) return false;
+        if (categoryList && !categoryList.includes(q.category)) return false;
         if (disallowUntimed && Number(q.unsuitable_for_timed || 0) === 1) return false;
         return fallbackCompatibleTypes.includes(q.round_type);
       });
+    } else if (candidates.length === 0 && effectiveRoundType === "bid_challenge") {
+      candidates = allPublished.filter((q) => {
+        if (exposedSet.has(q.id)) return false;
+        if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
+        if (req.difficulty !== "mixed" && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
+        if (categoryList && !categoryList.includes(q.category)) return false;
+        return q.round_type === "list_multiple";
+      });
     }
     if (candidates.length === 0) {
+      const catLabel = categoryList ? categoryList.join("\u060C ") : null;
       return {
         question: null,
         exhausted: true,
         remainingInFilter: 0,
         availableCategories,
-        messageAr: categoryFilter ? `\u0627\u0646\u062A\u0647\u062A \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u063A\u064A\u0631 \u0627\u0644\u0645\u0639\u0631\u0648\u0636\u0629 \u0641\u064A \u0641\u0626\u0629 \xAB${categoryFilter}\xBB \u0644\u0647\u0630\u0627 \u0627\u0644\u062D\u0633\u0627\u0628. \u0627\u062E\u062A\u0631 \u0641\u0626\u0629 \u0623\u062E\u0631\u0649 \u0623\u0648 \u0623\u0639\u062F \u062A\u062F\u0648\u064A\u0631 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0628\u0645\u0648\u0627\u0641\u0642\u062A\u0643.` : "\u0627\u0646\u062A\u0647\u062A \u062C\u0645\u064A\u0639 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u063A\u064A\u0631 \u0627\u0644\u0645\u0639\u0631\u0648\u0636\u0629 \u0641\u064A \u0647\u0630\u0627 \u0627\u0644\u0628\u0646\u0643 \u0644\u0647\u0630\u0647 \u0627\u0644\u0641\u0626\u0629 \u0627\u0644\u0639\u0645\u0631\u064A\u0629/\u0627\u0644\u0645\u0633\u062A\u0648\u0649. \u064A\u0645\u0643\u0646\u0643 \u0627\u062E\u062A\u064A\u0627\u0631 \u0628\u0646\u0643 \u0622\u062E\u0631 \u0623\u0648 \u0627\u0644\u0645\u0648\u0627\u0641\u0642\u0629 \u0639\u0644\u0649 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062F\u0648\u0631\u0629."
+        messageAr: catLabel ? `\u0627\u0646\u062A\u0647\u062A \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u063A\u064A\u0631 \u0627\u0644\u0645\u0639\u0631\u0648\u0636\u0629 \u0641\u064A \u0641\u0626\u0629 \xAB${catLabel}\xBB \u0644\u0647\u0630\u0627 \u0627\u0644\u062D\u0633\u0627\u0628. \u0627\u062E\u062A\u0631 \u0641\u0626\u0629 \u0623\u062E\u0631\u0649 \u0623\u0648 \u0623\u0639\u062F \u062A\u062F\u0648\u064A\u0631 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0628\u0645\u0648\u0627\u0641\u0642\u062A\u0643.` : "\u0627\u0646\u062A\u0647\u062A \u062C\u0645\u064A\u0639 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u063A\u064A\u0631 \u0627\u0644\u0645\u0639\u0631\u0648\u0636\u0629 \u0641\u064A \u0647\u0630\u0627 \u0627\u0644\u0628\u0646\u0643 \u0644\u0647\u0630\u0647 \u0627\u0644\u0641\u0626\u0629 \u0627\u0644\u0639\u0645\u0631\u064A\u0629/\u0627\u0644\u0645\u0633\u062A\u0648\u0649. \u064A\u0645\u0643\u0646\u0643 \u0627\u062E\u062A\u064A\u0627\u0631 \u0628\u0646\u0643 \u0622\u062E\u0631 \u0623\u0648 \u0627\u0644\u0645\u0648\u0627\u0641\u0642\u0629 \u0639\u0644\u0649 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062F\u0648\u0631\u0629."
       };
     }
     if (req.targetDifficultyLevel) {
@@ -805,6 +864,44 @@ function resetExposureCycleTx(db2, profileIds, bankId, category) {
 }
 
 // src/server/lessonStudio.ts
+var ALLOWED_AI_MODELS = [
+  {
+    id: "gemini-4-hydrogen",
+    labelAr: "Gemini Flash \u0627\u0644\u0642\u064A\u0627\u0633\u064A (gemini-4-hydrogen)",
+    noteAr: "\u0627\u0644\u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0645\u062C\u0627\u0646\u064A \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A (Free Tier) \u2014 \u0645\u062A\u0648\u0627\u0632\u0646 \u0644\u062A\u062D\u0644\u064A\u0644 PDF \u0627\u0644\u0639\u0631\u0628\u064A \u0648\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0627\u0644\u062C\u062F\u0627\u0648\u0644 \u0648\u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u062F\u0642\u064A\u0642\u0629",
+    isDefault: true
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    labelAr: "Gemini Flash \u0627\u0644\u0633\u0631\u064A\u0639 \u0627\u0644\u062E\u0641\u064A\u0641 (gemini-3.1-flash-lite)",
+    noteAr: "\u0633\u0631\u064A\u0639 \u062C\u062F\u0627\u064B \u0648\u0632\u0645\u0646 \u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0623\u0642\u0644 \u0648\u0645\u0646\u0627\u0633\u0628 \u0644\u062A\u0642\u0644\u064A\u0644 \u0627\u0633\u062A\u0647\u0644\u0627\u0643 \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629"
+  }
+];
+var DEFAULT_AI_MODEL = "gemini-4-hydrogen";
+function isAllowedAiModel(model) {
+  return model === "gemini-4-hydrogen" || model === "gemini-3.1-flash-lite";
+}
+function getConfiguredAiModel(db2) {
+  try {
+    const row = db2.prepare(`SELECT value FROM app_settings WHERE key = 'lesson_ai_model'`).get();
+    if (row && isAllowedAiModel(row.value)) {
+      return row.value;
+    }
+  } catch {
+  }
+  return DEFAULT_AI_MODEL;
+}
+function setConfiguredAiModel(db2, model) {
+  if (!isAllowedAiModel(model)) {
+    throw new Error("\u0627\u0644\u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0645\u062E\u062A\u0627\u0631 \u063A\u064A\u0631 \u0645\u062F\u0639\u0648\u0645 \u0636\u0645\u0646 \u0627\u0644\u0646\u0645\u0627\u0630\u062C \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 \u0627\u0644\u0645\u0639\u062A\u0645\u062F\u0629.");
+  }
+  db2.prepare(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ('lesson_ai_model', ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+  ).run(model);
+  return model;
+}
 var TopicDetailSchema = z.object({
   title: z.string().min(1),
   pageNumbers: z.array(z.number().int().min(1)).default([1]),
@@ -833,6 +930,26 @@ var LessonAnalysisSchema = z.object({
   estimatedMaxDistinctQuestions: z.number().int().min(0).default(50),
   coverageSummary: z.string().default("")
 });
+var COGNITIVE_SKILL_VALUES = [
+  "analysis",
+  "inference",
+  "chronology",
+  "comparison",
+  "fact_vs_hypothetical",
+  "recall"
+];
+function normalizeCognitiveSkill(raw) {
+  const val = String(raw || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (COGNITIVE_SKILL_VALUES.includes(val)) {
+    return val;
+  }
+  if (/استنتاج|استدلال|infer/.test(val)) return "inference";
+  if (/زمن|تسلسل|تاريخ|chron/.test(val)) return "chronology";
+  if (/مقارن|فارق|compar/.test(val)) return "comparison";
+  if (/حقيق|افتراض|hypo/.test(val)) return "fact_vs_hypothetical";
+  if (/تذكر|حفظ|مباشر|recall/.test(val)) return "recall";
+  return "analysis";
+}
 var GeneratedQuestionSchema = z.object({
   roundType: z.string().min(1),
   prompt: z.string().min(6),
@@ -844,10 +961,10 @@ var GeneratedQuestionSchema = z.object({
   orderCriteria: z.string().default(""),
   memoryItems: z.array(z.string()).default([]),
   oddReason: z.string().default(""),
-  cognitiveSkill: z.enum(["analysis", "inference", "chronology", "comparison", "fact_vs_hypothetical", "recall"]).optional().default("analysis"),
-  sourcePage: z.number().int().min(1),
+  cognitiveSkill: z.string().optional().transform((v) => normalizeCognitiveSkill(v)),
+  sourcePage: z.coerce.number().int().min(1).catch(1),
   sourceExcerpt: z.string().min(4),
-  confidenceScore: z.number().min(0).max(1).default(0.85),
+  confidenceScore: z.number().optional().transform((v) => typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.85),
   isReligious: z.boolean().default(false)
 });
 var GeneratedBatchResponseSchema = z.object({
@@ -892,12 +1009,33 @@ var TransientNetworkError = class extends Error {
     this.name = "TransientNetworkError";
   }
 };
+var QuotaExhaustedError = class extends Error {
+  constructor(message, opts = {}) {
+    super(message);
+    this.name = "QuotaExhaustedError";
+    this.retryDelaySec = opts.retryDelaySec;
+    this.isDailyLimit = Boolean(opts.isDailyLimit);
+  }
+};
+var RateLimitError = class extends Error {
+  constructor(message, retryDelaySec) {
+    super(message);
+    this.name = "RateLimitError";
+    this.retryDelaySec = retryDelaySec;
+  }
+};
+var DatabasePersistenceError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "DatabasePersistenceError";
+  }
+};
 var MAX_PDF_BYTES = 15 * 1024 * 1024;
 var MAX_PDF_PAGES_HINT = 60;
 var BATCH_TIMEOUT_MS = 45e3;
 var ANALYSIS_TIMEOUT_MS = 6e4;
 var MIN_BATCH_SIZE = 2;
-var DEFAULT_POOL_CONCURRENCY = 3;
+var DEFAULT_POOL_CONCURRENCY = 2;
 var activeLessonRuns = /* @__PURE__ */ new Set();
 var lessonStreamListeners = /* @__PURE__ */ new Map();
 var lessonRunTelemetry = /* @__PURE__ */ new Map();
@@ -927,6 +1065,12 @@ function emitLessonEvent(db2, lessonId, type, extra) {
     }
   }
 }
+function parseRetryDelaySec(msg) {
+  const m = msg.match(/retryDelay["']?\s*:\s*["']?(\d+(?:\.\d+)?)s/i) ?? msg.match(/retry in\s+(\d+(?:\.\d+)?)s/i);
+  if (!m) return void 0;
+  const parsed = Number(m[1]);
+  return Number.isFinite(parsed) ? Math.ceil(parsed) : void 0;
+}
 function createDefaultGeminiRunner() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
@@ -944,7 +1088,7 @@ function createDefaultGeminiRunner() {
     async generateStructuredJson({
       pdfBase64,
       pageSliceText,
-      model = "gemini-4-hydrogen",
+      model = DEFAULT_AI_MODEL,
       systemInstruction,
       prompt,
       responseSchema,
@@ -952,6 +1096,7 @@ function createDefaultGeminiRunner() {
       maxOutputTokens,
       timeoutMs
     }) {
+      const safeModel = isAllowedAiModel(model) ? model : DEFAULT_AI_MODEL;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -964,7 +1109,7 @@ function createDefaultGeminiRunner() {
         }
         parts.push({ text: prompt });
         const resp = await ai.models.generateContent({
-          model,
+          model: safeModel,
           contents: { parts },
           config: {
             systemInstruction,
@@ -986,7 +1131,21 @@ function createDefaultGeminiRunner() {
           throw new TransientNetworkError("\u0627\u0646\u062A\u0647\u062A \u0645\u0647\u0644\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0642\u0628\u0644 \u0627\u0643\u062A\u0645\u0627\u0644 \u0627\u0644\u0631\u062F.");
         }
         const msg = err instanceof Error ? err.message : String(err);
-        if (/429|503|502|504|ECONNRESET|ETIMEDOUT|fetch failed|network|socket|timeout/i.test(msg)) {
+        if (/429|RESOURCE_EXHAUSTED|quota|rate limit/i.test(msg)) {
+          const retryDelaySec = parseRetryDelaySec(msg);
+          const isDaily = /GenerateRequestsPerDay|PerDay|daily/i.test(msg) || typeof retryDelaySec === "number" && retryDelaySec > 120;
+          if (isDaily) {
+            throw new QuotaExhaustedError(
+              "\u0646\u0641\u062F\u062A \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 \u0644\u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (Free Tier). \u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0648\u062D\u0641\u0638 \u0643\u0644 \u0627\u0644\u062A\u0642\u062F\u0645.",
+              { retryDelaySec, isDailyLimit: true }
+            );
+          }
+          throw new RateLimitError(
+            "\u062A\u0645 \u0628\u0644\u0648\u063A \u062D\u062F \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0644\u062D\u0638\u064A \u0644\u0644\u062D\u0635\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 (Free Tier).",
+            retryDelaySec
+          );
+        }
+        if (/503|502|504|ECONNRESET|ETIMEDOUT|fetch failed|network|socket|timeout/i.test(msg)) {
           throw new TransientNetworkError(`\u062E\u0637\u0623 \u0645\u0624\u0642\u062A \u0641\u064A \u0627\u0644\u0634\u0628\u0643\u0629 \u0623\u0648 \u0627\u0644\u0636\u063A\u0637 \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645: ${msg}`);
         }
         throw err;
@@ -1197,33 +1356,90 @@ function isCancelRequested(db2, batchId) {
   const row = db2.prepare(`SELECT cancel_requested FROM lesson_question_batches WHERE id = ?`).get(batchId);
   return Number(row?.cancel_requested || 0) === 1;
 }
-function toUserFriendlyError(err) {
+function classifyLessonError(err) {
+  if (err instanceof QuotaExhaustedError) {
+    return {
+      category: "quota_exhausted",
+      messageAr: "\u0646\u0641\u062F\u062A \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 \u0644\u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (Free Tier). \u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0641\u0648\u0631\u0627\u064B \u0648\u062D\u0641\u0638 \u0643\u0644 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0648\u0627\u0644\u062A\u0642\u062F\u0645\u061B \u064A\u0645\u0643\u0646\u0643 \u0627\u0644\u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0644\u0627\u062D\u0642\u0627\u064B \u0639\u0646\u062F \u062A\u062C\u062F\u062F \u0627\u0644\u062D\u0635\u0629 \u0623\u0648 \u0627\u0644\u062A\u0628\u062F\u064A\u0644 \u0644\u0644\u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0623\u062E\u0641."
+    };
+  }
+  if (err instanceof RateLimitError) {
+    return {
+      category: "rate_limit",
+      messageAr: "\u062A\u0645 \u0628\u0644\u0648\u063A \u062D\u062F \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0644\u062D\u0638\u064A \u0636\u0645\u0646 \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 (Free Tier). \u062A\u0645 \u062D\u0641\u0638 \u062A\u0642\u062F\u0645\u0643 \u0627\u0644\u0633\u0627\u0628\u0642\u061B \u0627\u0646\u062A\u0638\u0631 \u0644\u062D\u0638\u0627\u062A \u062B\u0645 \u0627\u0636\u063A\u0637 \xAB\u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F\xBB."
+    };
+  }
+  if (err instanceof DatabasePersistenceError) {
+    return {
+      category: "database_failure",
+      messageAr: err.message
+    };
+  }
   if (err instanceof BatchOutputLimitError) {
-    return "\u0628\u0644\u063A\u062A \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629 \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 \u0644\u062D\u062C\u0645 \u0627\u0644\u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0642\u0628\u0644 \u0627\u0643\u062A\u0645\u0627\u0644\u0647\u0627. \u062A\u0645 \u062D\u0641\u0638 \u0643\u0644 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629 \u0648\u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F \u0628\u062D\u062C\u0645 \u062F\u0641\u0639\u0629 \u0623\u0635\u063A\u0631.";
+    return {
+      category: "invalid_json",
+      messageAr: "\u0628\u0644\u063A\u062A \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629 \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 \u0644\u062D\u062C\u0645 \u0627\u0644\u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0642\u0628\u0644 \u0627\u0643\u062A\u0645\u0627\u0644\u0647\u0627. \u062A\u0645 \u062D\u0641\u0638 \u0643\u0644 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629 \u0648\u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F \u0628\u062D\u062C\u0645 \u062F\u0641\u0639\u0629 \u0623\u0635\u063A\u0631."
+    };
   }
   if (err instanceof InvalidJsonResponseError) {
-    return "\u0627\u0646\u0642\u0637\u0639\u062A \u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0623\u0648 \u0648\u0635\u0644\u062A \u063A\u064A\u0631 \u0645\u0643\u062A\u0645\u0644\u0629 \u0644\u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629. \u0644\u0645 \u064A\u062A\u0645 \u062D\u0641\u0638 \u0623\u064A \u0628\u064A\u0627\u0646\u0627\u062A \u0646\u0627\u0642\u0635\u0629 \u0648\u0644\u0645 \u062A\u064F\u0641\u0642\u062F \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629.";
+    return {
+      category: "invalid_json",
+      messageAr: "\u0627\u0646\u0642\u0637\u0639\u062A \u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0623\u0648 \u0648\u0635\u0644\u062A \u063A\u064A\u0631 \u0645\u0643\u062A\u0645\u0644\u0629 \u0644\u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629. \u0644\u0645 \u064A\u062A\u0645 \u062D\u0641\u0638 \u0623\u064A \u0628\u064A\u0627\u0646\u0627\u062A \u0646\u0627\u0642\u0635\u0629 \u0648\u0644\u0645 \u062A\u064F\u0641\u0642\u062F \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629."
+    };
   }
   if (err instanceof SchemaValidationError) {
-    return err.message;
+    return {
+      category: "validation_failure",
+      messageAr: err.message
+    };
   }
   if (err instanceof TransientNetworkError) {
-    return "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0645\u0624\u0642\u062A\u0627\u064B \u0628\u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0623\u0648 \u0627\u0646\u062A\u0647\u062A \u0627\u0644\u0645\u0647\u0644\u0629. \u062A\u0645 \u062D\u0641\u0638 \u062A\u0642\u062F\u0645\u0643 \u0627\u0644\u0633\u0627\u0628\u0642 \u0648\u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F \u0641\u0648\u0631\u0627\u064B.";
+    const isTimeout = /انتهت مهلة|timeout|ETIMEDOUT|abort/i.test(err.message);
+    return {
+      category: isTimeout ? "timeout" : "network_interruption",
+      messageAr: isTimeout ? "\u0627\u0646\u062A\u0647\u062A \u0645\u0647\u0644\u0629 \u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0644\u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629. \u062A\u0645 \u062D\u0641\u0638 \u062A\u0642\u062F\u0645\u0643 \u0627\u0644\u0633\u0627\u0628\u0642 \u0648\u064A\u0645\u0643\u0646\u0643 \u0627\u0644\u0627\u0633\u062A\u0643\u0645\u0627\u0644." : "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0645\u0624\u0642\u062A\u0627\u064B \u0628\u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A. \u062A\u0645 \u062D\u0641\u0638 \u062A\u0642\u062F\u0645\u0643 \u0627\u0644\u0633\u0627\u0628\u0642 \u0648\u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F \u0641\u0648\u0631\u0627\u064B."
+    };
   }
   const msg = err instanceof Error ? err.message : String(err);
   if (/GEMINI_API_KEY|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
-    return "\u062A\u0639\u0630\u0631 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0635\u0644\u0627\u062D\u064A\u0629 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645.";
+    return {
+      category: "quota_exhausted",
+      messageAr: "\u062A\u0639\u0630\u0631 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0635\u0644\u0627\u062D\u064A\u0629 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645."
+    };
   }
   if (/RESOURCE_EXHAUSTED|429/i.test(msg)) {
-    return "\u062A\u0645 \u0628\u0644\u0648\u063A \u062D\u062F \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0645\u0624\u0642\u062A \u0644\u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A. \u0627\u0646\u062A\u0638\u0631 \u0644\u062D\u0638\u0627\u062A \u062B\u0645 \u0627\u0636\u063A\u0637 \xAB\u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F\xBB.";
+    const isDaily = /GenerateRequestsPerDay|PerDay|daily/i.test(msg);
+    return {
+      category: isDaily ? "quota_exhausted" : "rate_limit",
+      messageAr: isDaily ? "\u0646\u0641\u062F\u062A \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 \u0644\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (Free Tier). \u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0645\u0639 \u062D\u0641\u0638 \u0627\u0644\u062A\u0642\u062F\u0645." : "\u062A\u0645 \u0628\u0644\u0648\u063A \u062D\u062F \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0644\u062D\u0638\u064A \u0644\u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A. \u0627\u0646\u062A\u0638\u0631 \u0644\u062D\u0638\u0627\u062A \u062B\u0645 \u0627\u0636\u063A\u0637 \xAB\u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F\xBB."
+    };
   }
   if (/Unterminated string|Unexpected token|JSON/i.test(msg)) {
-    return "\u062A\u0648\u0642\u0641\u062A \u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0627\u0644\u062A\u0648\u0644\u064A\u062F \u0642\u0628\u0644 \u0627\u0643\u062A\u0645\u0627\u0644 \u0635\u064A\u063A\u062A\u0647\u0627 \u0644\u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629. \u062A\u0645 \u062D\u0641\u0638 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629 \u0648\u064A\u0645\u0643\u0646\u0643 \u0625\u0639\u0627\u062F\u0629 \u0645\u062D\u0627\u0648\u0644\u0629 \u0627\u0644\u062F\u0641\u0639\u0629.";
+    return {
+      category: "invalid_json",
+      messageAr: "\u062A\u0648\u0642\u0641\u062A \u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0627\u0644\u062A\u0648\u0644\u064A\u062F \u0642\u0628\u0644 \u0627\u0643\u062A\u0645\u0627\u0644 \u0635\u064A\u063A\u062A\u0647\u0627 \u0644\u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629. \u062A\u0645 \u062D\u0641\u0638 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629 \u0648\u064A\u0645\u0643\u0646\u0643 \u0625\u0639\u0627\u062F\u0629 \u0645\u062D\u0627\u0648\u0644\u0629 \u0627\u0644\u062F\u0641\u0639\u0629."
+    };
   }
-  return msg || "\u062A\u0639\u0630\u0631 \u0625\u0643\u0645\u0627\u0644 \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629\u060C \u062A\u0645 \u062D\u0641\u0638 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0635\u0627\u0644\u062D\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629.";
+  if (/PDF|ممسوح|استخلاص نص|صفحات فارغة/i.test(msg)) {
+    return {
+      category: "file_parsing_error",
+      messageAr: msg
+    };
+  }
+  if (/SQLITE_/i.test(msg)) {
+    return {
+      category: "database_failure",
+      messageAr: "\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u062F\u0641\u0639\u0629 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u062D\u0644\u064A\u0629\u061B \u064A\u0631\u062C\u0649 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0633\u062C\u0644 \u0627\u0644\u0641\u0646\u064A."
+    };
+  }
+  return {
+    category: "network_interruption",
+    messageAr: msg || "\u062A\u0639\u0630\u0631 \u0625\u0643\u0645\u0627\u0644 \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629\u060C \u062A\u0645 \u062D\u0641\u0638 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0635\u0627\u0644\u062D\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629."
+  };
 }
 async function runSingleGeminiCallWithRetry(params) {
   let lastNetworkErr;
+  let rateLimitRetried = false;
   for (let netAttempt = 0; netAttempt <= 2; netAttempt++) {
     const t0 = Date.now();
     try {
@@ -1250,6 +1466,30 @@ async function runSingleGeminiCallWithRetry(params) {
       });
       return parsed.data;
     } catch (err) {
+      if (err instanceof QuotaExhaustedError) {
+        appendDiagnostic(params.db, params.batchId, params.diagnostics, {
+          batchIndex: params.batchIndex,
+          batchSize: params.batchSize,
+          elapsedMs: Date.now() - t0,
+          message: `\u062A\u0648\u0642\u0641 \u0641\u0648\u0631\u064A \u0628\u0633\u0628\u0628 \u0646\u0641\u0627\u062F \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629${err.retryDelaySec ? ` (retryDelay=${err.retryDelaySec}s)` : ""}.`
+        });
+        throw err;
+      }
+      if (err instanceof RateLimitError) {
+        appendDiagnostic(params.db, params.batchId, params.diagnostics, {
+          batchIndex: params.batchIndex,
+          batchSize: params.batchSize,
+          elapsedMs: Date.now() - t0,
+          message: `\u062D\u062F \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0644\u062D\u0638\u064A 429${err.retryDelaySec ? ` (retryDelay=${err.retryDelaySec}s)` : ""}.`
+        });
+        if (!rateLimitRetried && typeof err.retryDelaySec === "number" && err.retryDelaySec <= 25) {
+          rateLimitRetried = true;
+          const waitMs = Math.min(15e3, Math.max(1e3, err.retryDelaySec * 1e3));
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        throw err;
+      }
       if (err instanceof BatchOutputLimitError) {
         appendDiagnostic(params.db, params.batchId, params.diagnostics, {
           batchIndex: params.batchIndex,
@@ -1355,6 +1595,30 @@ var ANALYSIS_RESPONSE_SCHEMA = {
     "coverageSummary"
   ]
 };
+var COMPACT_ANALYSIS_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    readabilityOk: { type: Type.BOOLEAN },
+    readabilityNote: { type: Type.STRING },
+    actualPageCount: { type: Type.INTEGER },
+    isReligiousContent: { type: Type.BOOLEAN },
+    topics: ANALYSIS_RESPONSE_SCHEMA.properties.topics,
+    pageSummaries: ANALYSIS_RESPONSE_SCHEMA.properties.pageSummaries,
+    objectives: { type: Type.ARRAY, items: { type: Type.STRING } },
+    estimatedMaxDistinctQuestions: { type: Type.INTEGER },
+    coverageSummary: { type: Type.STRING }
+  },
+  required: [
+    "readabilityOk",
+    "readabilityNote",
+    "actualPageCount",
+    "isReligiousContent",
+    "topics",
+    "objectives",
+    "estimatedMaxDistinctQuestions",
+    "coverageSummary"
+  ]
+};
 var BATCH_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -1363,7 +1627,23 @@ var BATCH_RESPONSE_SCHEMA = {
       items: {
         type: Type.OBJECT,
         properties: {
-          roundType: { type: Type.STRING },
+          roundType: {
+            type: Type.STRING,
+            enum: [
+              "rapid_fire",
+              "list_multiple",
+              "true_false",
+              "multiple_choice",
+              "fill_blank",
+              "who_am_i",
+              "odd_one_out",
+              "order_items",
+              "memory",
+              "buzzer",
+              "golden",
+              "bid_challenge"
+            ]
+          },
           prompt: { type: Type.STRING },
           options: { type: Type.ARRAY, items: { type: Type.STRING } },
           acceptableAnswers: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -1373,7 +1653,10 @@ var BATCH_RESPONSE_SCHEMA = {
           orderCriteria: { type: Type.STRING },
           memoryItems: { type: Type.ARRAY, items: { type: Type.STRING } },
           oddReason: { type: Type.STRING },
-          cognitiveSkill: { type: Type.STRING },
+          cognitiveSkill: {
+            type: Type.STRING,
+            enum: ["analysis", "inference", "chronology", "comparison", "fact_vs_hypothetical", "recall"]
+          },
           sourcePage: { type: Type.INTEGER },
           sourceExcerpt: { type: Type.STRING },
           confidenceScore: { type: Type.NUMBER },
@@ -1383,6 +1666,7 @@ var BATCH_RESPONSE_SCHEMA = {
           "roundType",
           "prompt",
           "acceptableAnswers",
+          "cognitiveSkill",
           "sourcePage",
           "sourceExcerpt",
           "confidenceScore",
@@ -1454,17 +1738,19 @@ function createLessonBatchJob(db2, input) {
       lessonId,
       input.createdBy
     );
+    const modelUsed = getConfiguredAiModel(db2);
     db2.prepare(
       `INSERT INTO lesson_question_batches (
          id, lesson_id, bank_id, pipeline_stage, stage_logs_json, requested_count,
-         current_batch_size, status_message_ar
-       ) VALUES (?, ?, ?, 'uploaded', '[]', ?, ?, ?)`
+         current_batch_size, model_used, started_at, last_batch_status, status_message_ar
+       ) VALUES (?, ?, ?, 'uploaded', '[]', ?, ?, ?, datetime('now'), 'idle', ?)`
     ).run(
       batchId,
       lessonId,
       bankId,
       Math.min(100, Math.max(1, input.requestedCount)),
       initialBatchSize,
+      modelUsed,
       "\u062C\u0627\u0631\u064D \u062A\u062C\u0647\u064A\u0632 \u0645\u0644\u0641 \u0627\u0644\u062F\u0631\u0633 \u0648\u0641\u062D\u0635 \u0627\u0644\u0635\u0641\u062D\u0627\u062A..."
     );
   })();
@@ -1501,9 +1787,9 @@ async function processLessonBatches(params) {
     `SELECT l.id as lesson_id, l.title, l.subject, l.age_group, l.difficulty,
               d.id as doc_id, d.filename, d.page_count, d.sha256, d.storage_path, d.extracted_content_json,
               b.id as batch_id, b.bank_id, b.stage_logs_json, b.requested_count,
-              b.generated_count, b.verified_count, b.rejected_count,
-              b.plan_json, b.completed_batches, b.total_batches, b.current_batch_size,
-              b.failed_batch_index, b.diagnostic_logs_json
+              b.received_count, b.accepted_count, b.generated_count, b.verified_count, b.rejected_count,
+              b.plan_json, b.completed_batches, b.failed_batches, b.total_batches, b.current_batch_size,
+              b.failed_batch_index, b.model_used, b.diagnostic_logs_json
        FROM lessons l
        JOIN lesson_documents d ON d.lesson_id = l.id
        JOIN lesson_question_batches b ON b.lesson_id = l.id
@@ -1525,12 +1811,17 @@ async function processLessonBatches(params) {
   const docSha256 = String(row.sha256 || "");
   const logs = JSON.parse(String(row.stage_logs_json || "[]"));
   const diagnostics = JSON.parse(String(row.diagnostic_logs_json || "[]"));
+  const activeModel = getConfiguredAiModel(db2);
   db2.prepare(
-    `UPDATE lesson_question_batches SET cancel_requested = 0, error_message = NULL, updated_at = datetime('now') WHERE id = ?`
-  ).run(batchId);
+    `UPDATE lesson_question_batches
+     SET cancel_requested = 0, error_message = NULL, error_category = NULL,
+         model_used = ?, started_at = COALESCE(started_at, datetime('now')), ended_at = NULL,
+         updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(activeModel, batchId);
   try {
     if (!storagePath || !fs.existsSync(storagePath)) {
-      throw new Error("\u0645\u0644\u0641 PDF \u0627\u0644\u0623\u0635\u0644\u064A \u0644\u0644\u062F\u0631\u0633 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645.");
+      throw new Error("\u0645\u0644\u0641 PDF \u0627\u0644\u0623\u0635\u0644\u064A \u0644\u0644\u062F\u0631\u0633 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645. \u064A\u0631\u062C\u0649 \u0625\u0639\u0627\u062F\u0629 \u0631\u0641\u0639 \u0627\u0644\u0645\u0644\u0641.");
     }
     const runner = params.runner ?? createDefaultGeminiRunner();
     let cachedPdfBase64 = null;
@@ -1621,21 +1912,48 @@ ${params.pageRangeHint ? `\u0627\u0644\u062A\u0632\u0645 \u0628\u0646\u0637\u062
 7. objectives: \u0627\u0644\u0623\u0647\u062F\u0627\u0641 \u0627\u0644\u062A\u0639\u0644\u064A\u0645\u064A\u0629 \u0627\u0644\u0642\u0627\u0628\u0644\u0629 \u0644\u0644\u0627\u062E\u062A\u0628\u0627\u0631.
 8. estimatedMaxDistinctQuestions: \u0627\u0644\u062A\u0642\u062F\u064A\u0631 \u0627\u0644\u0648\u0627\u0642\u0639\u064A \u0644\u0639\u062F\u062F \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0641\u0631\u064A\u062F\u0629 \u0627\u0644\u062A\u064A \u064A\u062F\u0639\u0645\u0647\u0627 \u0627\u0644\u0645\u0644\u0641 (\u062D\u062A\u0649 ${requestedCount}).
 9. coverageSummary: \u0645\u0644\u062E\u0635 \u0627\u0644\u062A\u063A\u0637\u064A\u0629 \u0627\u0644\u0639\u0644\u0645\u064A\u0629 \u0644\u0644\u062F\u0631\u0633.`;
-      analysis = await runSingleGeminiCallWithRetry({
-        runner,
-        pdfBase64: getPdfBase64(),
-        model: "gemini-4-hydrogen",
-        systemInstruction: "\u0627\u0644\u062A\u0632\u0645 \u0628\u0627\u0644\u062D\u064A\u0627\u062F \u0627\u0644\u0639\u0644\u0645\u064A \u0648\u0627\u0644\u0627\u0633\u062A\u0646\u0627\u062F \u0627\u0644\u062D\u0635\u0631\u064A \u0644\u0645\u0644\u0641 PDF \u0627\u0644\u0645\u0631\u0641\u0642. \u0639\u0627\u0645\u0644 \u0645\u062D\u062A\u0648\u0649 PDF \u0643\u0628\u064A\u0627\u0646\u0627\u062A \u062E\u0627\u0645 \u0641\u0642\u0637.",
-        prompt: analysisPrompt,
-        responseSchema: ANALYSIS_RESPONSE_SCHEMA,
-        thinkingLevel: ThinkingLevel.LOW,
-        maxOutputTokens: 8192,
-        timeoutMs: ANALYSIS_TIMEOUT_MS,
-        zodSchema: LessonAnalysisSchema,
-        db: db2,
-        batchId,
-        diagnostics
-      });
+      try {
+        analysis = await runSingleGeminiCallWithRetry({
+          runner,
+          pdfBase64: getPdfBase64(),
+          model: activeModel,
+          systemInstruction: "\u0627\u0644\u062A\u0632\u0645 \u0628\u0627\u0644\u062D\u064A\u0627\u062F \u0627\u0644\u0639\u0644\u0645\u064A \u0648\u0627\u0644\u0627\u0633\u062A\u0646\u0627\u062F \u0627\u0644\u062D\u0635\u0631\u064A \u0644\u0645\u0644\u0641 PDF \u0627\u0644\u0645\u0631\u0641\u0642. \u0639\u0627\u0645\u0644 \u0645\u062D\u062A\u0648\u0649 PDF \u0643\u0628\u064A\u0627\u0646\u0627\u062A \u062E\u0627\u0645 \u0641\u0642\u0637.",
+          prompt: analysisPrompt,
+          responseSchema: ANALYSIS_RESPONSE_SCHEMA,
+          thinkingLevel: ThinkingLevel.LOW,
+          maxOutputTokens: 8192,
+          timeoutMs: ANALYSIS_TIMEOUT_MS,
+          zodSchema: LessonAnalysisSchema,
+          db: db2,
+          batchId,
+          diagnostics
+        });
+      } catch (analysisErr) {
+        if (analysisErr instanceof BatchOutputLimitError || analysisErr instanceof InvalidJsonResponseError) {
+          appendDiagnostic(db2, batchId, diagnostics, {
+            message: "\u062A\u062C\u0627\u0648\u0632 \u0627\u0644\u062A\u062D\u0644\u064A\u0644 \u0627\u0644\u0646\u0635\u064A \u0627\u0644\u0643\u0627\u0645\u0644 \u062D\u062F \u0627\u0644\u0645\u062E\u0631\u062C\u0627\u062A \u2014 \u0627\u0644\u062A\u062D\u0648\u0644 \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B \u0625\u0644\u0649 \u0627\u0644\u062A\u062D\u0644\u064A\u0644 \u0627\u0644\u0645\u0648\u062C\u0632 \u0627\u0644\u0645\u0636\u0645\u0648\u0646 \u0644\u0644\u0635\u0641\u062D\u0627\u062A."
+          });
+          const compactPrompt = `${analysisPrompt}
+\u0645\u0644\u0627\u062D\u0638\u0629 \u0625\u0636\u0627\u0641\u064A\u0629: \u0623\u0639\u062F \u0627\u0644\u062A\u062D\u0644\u064A\u0644 \u0628\u0635\u064A\u063A\u0629 \u0645\u0648\u062C\u0632\u0629 \u062F\u0648\u0646 \u0646\u0635\u0648\u0635 \u0627\u0644\u0635\u0641\u062D\u0627\u062A \u0627\u0644\u0643\u0627\u0645\u0644\u0629 (pageSummaries \u0641\u0642\u0637 \u0645\u0639 topics \u0648objectives) \u0644\u062A\u062C\u0646\u0628 \u062A\u062C\u0627\u0648\u0632 \u062D\u062F \u0627\u0644\u0627\u0633\u062A\u062C\u0627\u0628\u0629.`;
+          analysis = await runSingleGeminiCallWithRetry({
+            runner,
+            pdfBase64: getPdfBase64(),
+            model: activeModel,
+            systemInstruction: "\u0627\u0644\u062A\u0632\u0645 \u0628\u0627\u0644\u062D\u064A\u0627\u062F \u0627\u0644\u0639\u0644\u0645\u064A \u0648\u0627\u0644\u0627\u0633\u062A\u0646\u0627\u062F \u0627\u0644\u062D\u0635\u0631\u064A \u0644\u0645\u0644\u0641 PDF \u0627\u0644\u0645\u0631\u0641\u0642. \u0639\u0627\u0645\u0644 \u0645\u062D\u062A\u0648\u0649 PDF \u0643\u0628\u064A\u0627\u0646\u0627\u062A \u062E\u0627\u0645 \u0641\u0642\u0637.",
+            prompt: compactPrompt,
+            responseSchema: COMPACT_ANALYSIS_RESPONSE_SCHEMA,
+            thinkingLevel: ThinkingLevel.LOW,
+            maxOutputTokens: 8192,
+            timeoutMs: ANALYSIS_TIMEOUT_MS,
+            zodSchema: LessonAnalysisSchema,
+            db: db2,
+            batchId,
+            diagnostics
+          });
+        } else {
+          throw analysisErr;
+        }
+      }
       if (!analysis.readabilityOk) {
         throw new Error(`\u062A\u0639\u0630\u0631 \u0627\u0633\u062A\u062E\u0644\u0627\u0635 \u0646\u0635 \u0643\u0627\u0641\u064D \u0645\u0646 \u0627\u0644\u0645\u0644\u0641: ${analysis.readabilityNote || "\u0635\u0641\u062D\u0627\u062A \u0641\u0627\u0631\u063A\u0629 \u0623\u0648 \u063A\u064A\u0631 \u0645\u0642\u0631\u0648\u0621\u0629"}`);
       }
@@ -1660,14 +1978,15 @@ ${params.pageRangeHint ? `\u0627\u0644\u062A\u0632\u0645 \u0628\u0646\u0637\u062
         );
         if (docSha256) {
           db2.prepare(
-            `INSERT OR REPLACE INTO pdf_analysis_cache (sha256, page_count, is_religious, analysis_json, page_texts_json, updated_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`
+            `INSERT OR REPLACE INTO pdf_analysis_cache (sha256, page_count, is_religious, analysis_json, page_texts_json, model_used, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
           ).run(
             docSha256,
             Math.max(1, analysis.actualPageCount),
             analysis.isReligiousContent ? 1 : 0,
             JSON.stringify(analysis),
-            JSON.stringify(analysis.pageTexts ?? [])
+            JSON.stringify(analysis.pageTexts ?? []),
+            activeModel
           );
         }
       })();
@@ -1725,9 +2044,12 @@ ${params.pageRangeHint ? `\u0627\u0644\u062A\u0632\u0645 \u0628\u0646\u0637\u062
     const seenHashes = new Set(existingRows.map((r) => r.normalized_hash));
     const keptPrompts = existingRows.map((r) => r.prompt);
     const keptFingerprints = existingRows.map((r) => toCompactFactFingerprint(r.prompt, r.source_page));
+    let totalReceivedCount = Number(row.received_count || row.generated_count || 0);
+    let totalAcceptedCount = Number(row.accepted_count || keptPrompts.length || 0);
     let totalGeneratedCount = Number(row.generated_count || 0);
     let totalVerifiedCount = keptPrompts.length;
     let totalRejectedCount = Number(row.rejected_count || 0);
+    let failedBatchesCount = Number(row.failed_batches || 0);
     let currentBatchSize = Number(row.current_batch_size || getInitialBatchSize(difficulty, requestedCount));
     let consecutiveZeroGainBatches = 0;
     let materialExhaustedNote = "";
@@ -1859,7 +2181,7 @@ ${params.pageRangeHint ? `- \u0646\u0637\u0627\u0642 \u0627\u0644\u0635\u0641\u0
             runner,
             pdfBase64: useTextSliceOnly ? void 0 : getPdfBase64(),
             pageSliceText: useTextSliceOnly ? slice.sliceText : void 0,
-            model: "gemini-4-hydrogen",
+            model: activeModel,
             systemInstruction: "\u0623\u0639\u062F JSON \u0645\u0637\u0627\u0628\u0642\u0627\u064B \u0644\u0644\u0645\u062E\u0637\u0637 \u0641\u0642\u0637. \u0627\u062C\u0639\u0644 \u0627\u0644\u0646\u0635\u0648\u0635 \u0639\u0631\u0628\u064A\u0629 \u062F\u0642\u064A\u0642\u0629 \u0648\u0645\u0648\u062C\u0632\u0629 \u0648\u062E\u0627\u0644\u064A\u0629 \u0645\u0646 \u0627\u0644\u062D\u0634\u0648. \u0644\u0627 \u062A\u062E\u062A\u0631\u0639 \u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0645\u0646 \u062E\u0627\u0631\u062C \u0627\u0644\u0646\u0635.",
             prompt: batchPrompt,
             responseSchema: BATCH_RESPONSE_SCHEMA,
@@ -1875,6 +2197,7 @@ ${params.pageRangeHint ? `- \u0646\u0637\u0627\u0642 \u0627\u0644\u0635\u0641\u0
           });
           const candidates = genBatch.questions;
           totalGeneratedCount += candidates.length;
+          totalReceivedCount += candidates.length;
           let verdictMap = /* @__PURE__ */ new Map();
           if (candidates.length > 0) {
             const verifyPages = Array.from(
@@ -1925,62 +2248,69 @@ ${JSON.stringify(
           let rejectedInAttempt = 0;
           const newlyInsertedIds = [];
           const diffLevel = difficultyToLevel(difficulty);
-          db2.transaction(() => {
-            for (let i = 0; i < candidates.length; i++) {
-              if (totalVerifiedCount >= requestedCount) break;
-              const cand = candidates[i];
-              const verdict = verdictMap.get(i);
-              const isSupported = verdict ? verdict.supported : Boolean(cand.sourceExcerpt.trim().length >= 4 && cand.sourcePage >= 1);
-              if (!isSupported || cand.sourceExcerpt.trim().length < 4) {
-                rejectedInAttempt++;
-                continue;
+          try {
+            db2.transaction(() => {
+              for (let i = 0; i < candidates.length; i++) {
+                if (totalVerifiedCount >= requestedCount) break;
+                const cand = candidates[i];
+                const verdict = verdictMap.get(i);
+                const isSupported = verdict ? verdict.supported : Boolean(cand.sourceExcerpt.trim().length >= 4 && cand.sourcePage >= 1);
+                if (!isSupported || cand.sourceExcerpt.trim().length < 4) {
+                  rejectedInAttempt++;
+                  continue;
+                }
+                const coercedType = coerceRoundType(cand.roundType) ?? "multiple_choice";
+                const hash = buildQuestionHash(cand.prompt, cand.acceptableAnswers);
+                if (seenHashes.has(hash)) {
+                  continue;
+                }
+                if (keptPrompts.some((kp) => arabicTextSimilarity(kp, cand.prompt) >= 0.88)) {
+                  continue;
+                }
+                seenHashes.add(hash);
+                const trimmedPrompt = cand.prompt.trim();
+                keptPrompts.push(trimmedPrompt);
+                const pageNum = verdict?.correctedPage && verdict.correctedPage > 0 ? verdict.correctedPage : cand.sourcePage;
+                keptFingerprints.push(toCompactFactFingerprint(trimmedPrompt, pageNum));
+                totalVerifiedCount++;
+                totalAcceptedCount++;
+                savedInAttempt++;
+                const isRel = Boolean(cand.isReligious || analysis.isReligiousContent);
+                const lowConfidence = (cand.confidenceScore ?? 0.85) < 0.78;
+                const status = isRel || lowConfidence ? "needs_review" : "published";
+                const qId = `q-${crypto2.randomUUID().slice(0, 8)}`;
+                newlyInsertedIds.push(qId);
+                insertQ.run(
+                  qId,
+                  bankId,
+                  coercedType,
+                  subject,
+                  ageGroup,
+                  difficulty,
+                  diffLevel,
+                  trimmedPrompt,
+                  JSON.stringify(cand.options ?? []),
+                  JSON.stringify(cand.acceptableAnswers),
+                  typeof cand.correctIndex === "number" ? cand.correctIndex : null,
+                  cand.explanation ?? "",
+                  JSON.stringify(cand.clues ?? []),
+                  cand.orderCriteria ?? "",
+                  JSON.stringify(cand.memoryItems ?? []),
+                  cand.oddReason ?? "",
+                  isRel ? 1 : 0,
+                  status,
+                  pageNum,
+                  cand.sourceExcerpt.trim(),
+                  cand.confidenceScore ?? 0.85,
+                  hash
+                );
               }
-              const coercedType = coerceRoundType(cand.roundType) ?? "multiple_choice";
-              const hash = buildQuestionHash(cand.prompt, cand.acceptableAnswers);
-              if (seenHashes.has(hash)) {
-                continue;
-              }
-              if (keptPrompts.some((kp) => arabicTextSimilarity(kp, cand.prompt) >= 0.88)) {
-                continue;
-              }
-              seenHashes.add(hash);
-              const trimmedPrompt = cand.prompt.trim();
-              keptPrompts.push(trimmedPrompt);
-              const pageNum = verdict?.correctedPage && verdict.correctedPage > 0 ? verdict.correctedPage : cand.sourcePage;
-              keptFingerprints.push(toCompactFactFingerprint(trimmedPrompt, pageNum));
-              totalVerifiedCount++;
-              savedInAttempt++;
-              const isRel = Boolean(cand.isReligious || analysis.isReligiousContent);
-              const lowConfidence = (cand.confidenceScore ?? 0.85) < 0.78;
-              const status = isRel || lowConfidence ? "needs_review" : "published";
-              const qId = `q-${crypto2.randomUUID().slice(0, 8)}`;
-              newlyInsertedIds.push(qId);
-              insertQ.run(
-                qId,
-                bankId,
-                coercedType,
-                subject,
-                ageGroup,
-                difficulty,
-                diffLevel,
-                trimmedPrompt,
-                JSON.stringify(cand.options ?? []),
-                JSON.stringify(cand.acceptableAnswers),
-                typeof cand.correctIndex === "number" ? cand.correctIndex : null,
-                cand.explanation ?? "",
-                JSON.stringify(cand.clues ?? []),
-                cand.orderCriteria ?? "",
-                JSON.stringify(cand.memoryItems ?? []),
-                cand.oddReason ?? "",
-                isRel ? 1 : 0,
-                status,
-                pageNum,
-                cand.sourceExcerpt.trim(),
-                cand.confidenceScore ?? 0.85,
-                hash
-              );
-            }
-          })();
+            })();
+          } catch (dbErr) {
+            throw new DatabasePersistenceError(
+              `\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0645\u0633\u062A\u0644\u0645\u0629 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`
+            );
+          }
           totalRejectedCount += rejectedInAttempt;
           slot.savedCount += savedInAttempt;
           slot.status = "completed";
@@ -1998,19 +2328,23 @@ ${JSON.stringify(
           const completedCount = plan.filter((p) => p.status === "completed").length;
           db2.prepare(
             `UPDATE lesson_question_batches
-             SET plan_json = ?, total_batches = ?, completed_batches = ?, current_batch_size = ?,
-                 generated_count = ?, verified_count = ?, rejected_count = ?, failed_batch_index = NULL,
+             SET plan_json = ?, total_batches = ?, completed_batches = ?, failed_batches = ?, current_batch_size = ?,
+                 received_count = ?, accepted_count = ?, generated_count = ?, verified_count = ?, rejected_count = ?,
+                 failed_batch_index = NULL, last_batch_status = 'completed',
                  status_message_ar = ?, updated_at = datetime('now')
              WHERE id = ?`
           ).run(
             JSON.stringify(plan),
             plan.length,
             completedCount,
+            failedBatchesCount,
             currentBatchSize,
+            totalReceivedCount,
+            totalAcceptedCount,
             totalGeneratedCount,
             totalVerifiedCount,
             totalRejectedCount,
-            `\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 ${totalVerifiedCount} \u0645\u0646 \u0623\u0635\u0644 ${requestedCount} \u0633\u0624\u0627\u0644\u064B\u0627`,
+            `\u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645 ${totalReceivedCount} \u0648\u062D\u0641\u0638 ${totalVerifiedCount} \u0645\u0646 \u0623\u0635\u0644 ${requestedCount} \u0633\u0624\u0627\u0644\u064B\u0627 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A`,
             batchId
           );
           lessonRunTelemetry.set(lessonId, { cacheHit, elapsedMs: Date.now() - runStartMs });
@@ -2025,6 +2359,19 @@ ${JSON.stringify(
           break;
         } catch (err) {
           batchLastErr = err;
+          if (err instanceof QuotaExhaustedError) {
+            stopDispatching = true;
+            break;
+          }
+          if (err instanceof RateLimitError) {
+            poolConcurrency = 1;
+            stopDispatching = true;
+            break;
+          }
+          if (err instanceof DatabasePersistenceError) {
+            stopDispatching = true;
+            break;
+          }
           if (err instanceof TransientNetworkError) {
             poolConcurrency = Math.max(1, poolConcurrency - 1);
             break;
@@ -2043,8 +2390,9 @@ ${JSON.stringify(
           }
         }
       }
-      if (!batchSucceeded && !stopDispatching && !isCancelRequested(db2, batchId)) {
+      if (!batchSucceeded && !isCancelRequested(db2, batchId)) {
         slot.status = "failed";
+        failedBatchesCount++;
         stopDispatching = true;
         if (!firstFatalErr) {
           firstFatalErr = { batchIndex: idx, err: batchLastErr };
@@ -2079,32 +2427,42 @@ ${JSON.stringify(
     });
     if (isCancelRequested(db2, batchId)) {
       appendStageLog(db2, batchId, logs, "cancelled", "\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629", "warning", `\u062A\u0645 \u062D\u0641\u0638 ${totalVerifiedCount} \u0633\u0624\u0627\u0644\u064B\u0627 \u0635\u0627\u0644\u062D\u064B\u0627 \u0642\u0628\u0644 \u0627\u0644\u0625\u064A\u0642\u0627\u0641.`);
-      setStatusMessage(db2, batchId, `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629 \u0645\u0639 \u062D\u0641\u0638 ${totalVerifiedCount} \u0633\u0624\u0627\u0644\u064B\u0627 \u0635\u0627\u0644\u062D\u064B\u0627`);
-      db2.prepare(`UPDATE lesson_question_batches SET pipeline_stage = 'cancelled', plan_json = ? WHERE id = ?`).run(
-        JSON.stringify(plan),
-        batchId
-      );
+      const cancelMsg = totalVerifiedCount === 0 ? `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629 \u0648\u062D\u0641\u0638 \u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0647\u0645\u0629 \u2014 \u0644\u0645 \u064A\u064F\u062D\u0641\u0638 \u0623\u064A \u0633\u0624\u0627\u0644 \u0628\u0639\u062F (0 \u0645\u0646 \u0623\u0635\u0644 ${requestedCount})` : `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629 \u0645\u0639 \u062D\u0641\u0638 ${totalVerifiedCount} \u0645\u0646 \u0623\u0635\u0644 ${requestedCount} \u0633\u0624\u0627\u0644\u064B\u0627 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A`;
+      db2.prepare(
+        `UPDATE lesson_question_batches
+         SET pipeline_stage = 'cancelled', plan_json = ?, received_count = ?, accepted_count = ?,
+             failed_batches = ?, last_batch_status = 'cancelled', ended_at = datetime('now'),
+             status_message_ar = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(JSON.stringify(plan), totalReceivedCount, totalAcceptedCount, failedBatchesCount, cancelMsg, batchId);
       emitLessonEvent(db2, lessonId, "paused");
       return getLessonBatchSummary(db2, lessonId);
     }
     if (firstFatalErr) {
       const { batchIndex: failedIdx, err: rawErr } = firstFatalErr;
-      const friendlyErr = toUserFriendlyError(rawErr);
+      const classified = classifyLessonError(rawErr);
       const completedCount = plan.filter((p) => p.status === "completed").length;
+      const pauseStatusMsg = totalVerifiedCount === 0 ? `\u062A\u0648\u0642\u0641 \u0645\u0624\u0642\u062A \u0639\u0646\u062F \u0627\u0644\u062F\u0641\u0639\u0629 ${failedIdx + 1} (\u062A\u0645 \u062D\u0641\u0638 \u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0647\u0645\u0629) \u2014 \u0644\u0645 \u064A\u064F\u062D\u0641\u0638 \u0623\u064A \u0633\u0624\u0627\u0644 \u0628\u0639\u062F (0 \u0645\u0646 \u0623\u0635\u0644 ${requestedCount})` : `\u062A\u0648\u0642\u0641 \u0645\u0624\u0642\u062A \u0639\u0646\u062F \u0627\u0644\u062F\u0641\u0639\u0629 ${failedIdx + 1} \u2014 \u062A\u0645 \u062D\u0641\u0638 ${totalVerifiedCount} \u0645\u0646 \u0623\u0635\u0644 ${requestedCount} \u0633\u0624\u0627\u0644\u064B\u0627 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A`;
       db2.prepare(
         `UPDATE lesson_question_batches
          SET pipeline_stage = 'batch_paused', plan_json = ?, total_batches = ?, completed_batches = ?,
-             current_batch_size = ?, failed_batch_index = ?, error_message = ?,
+             failed_batches = ?, current_batch_size = ?, failed_batch_index = ?,
+             received_count = ?, accepted_count = ?, last_batch_status = 'paused',
+             error_category = ?, error_message = ?, ended_at = datetime('now'),
              status_message_ar = ?, updated_at = datetime('now')
          WHERE id = ?`
       ).run(
         JSON.stringify(plan),
         plan.length,
         completedCount,
+        failedBatchesCount,
         currentBatchSize,
         failedIdx,
-        friendlyErr,
-        `\u062A\u0648\u0642\u0641 \u0645\u0624\u0642\u062A \u0639\u0646\u062F \u0627\u0644\u062F\u0641\u0639\u0629 ${failedIdx + 1} \u2014 \u062A\u0645 \u062D\u0641\u0638 ${totalVerifiedCount} \u0645\u0646 \u0623\u0635\u0644 ${requestedCount} \u0633\u0624\u0627\u0644\u064B\u0627`,
+        totalReceivedCount,
+        totalAcceptedCount,
+        classified.category,
+        classified.messageAr,
+        pauseStatusMsg,
         batchId
       );
       appendStageLog(
@@ -2114,10 +2472,10 @@ ${JSON.stringify(
         "batch_paused",
         "\u062A\u0648\u0642\u0641 \u0645\u0624\u0642\u062A \u0645\u0639 \u062D\u0641\u0638 \u0627\u0644\u062A\u0642\u062F\u0645",
         "warning",
-        `${friendlyErr} (\u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0645\u062D\u0641\u0648\u0638\u0629 \u062D\u062A\u0649 \u0627\u0644\u0622\u0646: ${totalVerifiedCount})`
+        `${classified.messageAr} (\u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0645\u062D\u0641\u0648\u0638\u0629 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A: ${totalVerifiedCount})`
       );
       lessonRunTelemetry.set(lessonId, { cacheHit, elapsedMs: Date.now() - runStartMs });
-      emitLessonEvent(db2, lessonId, "paused", { error: friendlyErr });
+      emitLessonEvent(db2, lessonId, "paused", { error: classified.messageAr });
       return getLessonBatchSummary(db2, lessonId);
     }
     setStatusMessage(db2, batchId, "\u062C\u0627\u0631\u064D \u062A\u062F\u0642\u064A\u0642 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0648\u0625\u0632\u0627\u0644\u0629 \u0627\u0644\u062A\u0643\u0631\u0627\u0631");
@@ -2167,7 +2525,7 @@ ${JSON.stringify(
       "schema_validation",
       "\u0641\u062D\u0635 \u0627\u0644\u0628\u0646\u064A\u0629 \u0627\u0644\u0642\u064A\u0627\u0633\u064A\u0629 \u0639\u0628\u0631 Zod",
       "completed",
-      `\u062C\u0645\u064A\u0639 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0645\u0637\u0627\u0628\u0642\u0629 \u062A\u0645\u0627\u0645\u0627\u064B \u0644\u0645\u062E\u0637\u0637 \u0645\u062D\u0631\u0643 \u0627\u0644\u064011 \u062C\u0648\u0644\u0629.`
+      `\u062C\u0645\u064A\u0639 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0645\u0637\u0627\u0628\u0642\u0629 \u062A\u0645\u0627\u0645\u0627\u064B \u0644\u0645\u062E\u0637\u0637 \u0645\u062D\u0631\u0643 \u0627\u0644\u064012 \u062C\u0648\u0644\u0629.`
     );
     appendStageLog(
       db2,
@@ -2183,14 +2541,19 @@ ${JSON.stringify(
     db2.prepare(
       `UPDATE lesson_question_batches
        SET pipeline_stage = ?, verified_count = ?, rejected_count = ?, generated_count = ?,
-           failed_batch_index = NULL, error_message = NULL, insufficient_content_note = ?,
-           status_message_ar = ?, updated_at = datetime('now')
+           received_count = ?, accepted_count = ?, failed_batches = ?,
+           failed_batch_index = NULL, last_batch_status = 'completed',
+           error_category = NULL, error_message = NULL, ended_at = datetime('now'),
+           insufficient_content_note = ?, status_message_ar = ?, updated_at = datetime('now')
        WHERE id = ?`
     ).run(
       finalStage,
       actualTotal,
       totalRejectedCount,
       totalGeneratedCount,
+      totalReceivedCount,
+      actualTotal,
+      failedBatchesCount,
       materialExhaustedNote,
       finalStatusText,
       batchId
@@ -2198,19 +2561,20 @@ ${JSON.stringify(
     emitLessonEvent(db2, lessonId, "done");
     return getLessonBatchSummary(db2, lessonId);
   } catch (err) {
-    const friendly = toUserFriendlyError(err);
+    const classified = classifyLessonError(err);
     lessonRunTelemetry.set(lessonId, { cacheHit, elapsedMs: Date.now() - runStartMs });
     appendDiagnostic(db2, batchId, diagnostics, {
       message: `\u0641\u0634\u0644 \u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629: ${err instanceof Error ? err.message : String(err)}`
     });
-    appendStageLog(db2, batchId, logs, "failed", "\u062A\u0639\u0630\u0631 \u0625\u0643\u0645\u0627\u0644 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629", "failed", friendly);
+    appendStageLog(db2, batchId, logs, "failed", "\u062A\u0639\u0630\u0631 \u0625\u0643\u0645\u0627\u0644 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629", "failed", classified.messageAr);
     db2.prepare(
       `UPDATE lesson_question_batches
-       SET pipeline_stage = 'failed', error_message = ?, status_message_ar = ?, updated_at = datetime('now')
+       SET pipeline_stage = 'failed', last_batch_status = 'failed', error_category = ?,
+           error_message = ?, status_message_ar = ?, ended_at = datetime('now'), updated_at = datetime('now')
        WHERE id = ?`
-    ).run(friendly, friendly, batchId);
-    emitLessonEvent(db2, lessonId, "error", { error: friendly });
-    throw new Error(friendly);
+    ).run(classified.category, classified.messageAr, classified.messageAr, batchId);
+    emitLessonEvent(db2, lessonId, "error", { error: classified.messageAr });
+    throw new Error(classified.messageAr);
   } finally {
     activeLessonRuns.delete(lessonId);
   }
@@ -2239,6 +2603,9 @@ function resumeLessonPipelineAsync(db2, lessonId, options = {}) {
   if (!summary) {
     throw new Error("\u0627\u0644\u062F\u0631\u0633 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F");
   }
+  if (!summary.fileAvailable) {
+    throw new Error("\u0645\u0644\u0641 PDF \u0627\u0644\u0623\u0635\u0644\u064A \u0644\u0644\u062F\u0631\u0633 \u0644\u0645 \u064A\u0639\u062F \u0645\u0648\u062C\u0648\u062F\u0627\u064B \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645\u061B \u064A\u0631\u062C\u0649 \u0625\u0639\u0627\u062F\u0629 \u0631\u0641\u0639 \u0627\u0644\u0645\u0644\u0641 \u0644\u0627\u0633\u062A\u0643\u0645\u0627\u0644 \u0627\u0644\u062A\u0648\u0644\u064A\u062F.");
+  }
   if (!options.runner) {
     createDefaultGeminiRunner();
   }
@@ -2256,6 +2623,8 @@ function cancelLessonPipeline(db2, lessonId) {
     `UPDATE lesson_question_batches
      SET cancel_requested = 1,
          pipeline_stage = CASE WHEN pipeline_stage IN ('batch_paused','failed') THEN 'cancelled' ELSE pipeline_stage END,
+         last_batch_status = CASE WHEN pipeline_stage IN ('batch_paused','failed') THEN 'cancelled' ELSE last_batch_status END,
+         ended_at = CASE WHEN pipeline_stage IN ('batch_paused','failed') THEN datetime('now') ELSE ended_at END,
          status_message_ar = '\u062A\u0645 \u0637\u0644\u0628 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629 \u0645\u0639 \u0627\u0644\u062D\u0641\u0627\u0638 \u0639\u0644\u0649 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0635\u0627\u0644\u062D\u0629...',
          updated_at = datetime('now')
      WHERE lesson_id = ?`
@@ -2266,10 +2635,11 @@ function cancelLessonPipeline(db2, lessonId) {
 function getLessonBatchSummary(db2, lessonId) {
   const row = db2.prepare(
     `SELECT l.id as lesson_id, l.title, l.subject, l.age_group, l.difficulty, l.created_at,
-              d.filename, d.page_count, d.is_scanned, d.analysis_json, d.objectives_json, d.parsed_summary_json,
+              d.filename, d.page_count, d.is_scanned, d.storage_path, d.analysis_json, d.objectives_json, d.parsed_summary_json,
               b.id as batch_id, b.bank_id, b.pipeline_stage, b.stage_logs_json,
-              b.requested_count, b.generated_count, b.verified_count, b.rejected_count,
-              b.completed_batches, b.total_batches, b.current_batch_size, b.failed_batch_index,
+              b.requested_count, b.received_count, b.accepted_count, b.generated_count, b.verified_count, b.rejected_count,
+              b.completed_batches, b.failed_batches, b.total_batches, b.current_batch_size, b.failed_batch_index,
+              b.last_batch_status, b.error_category, b.model_used, b.started_at, b.ended_at,
               b.status_message_ar, b.diagnostic_logs_json, b.insufficient_content_note, b.error_message
        FROM lessons l
        JOIN lesson_documents d ON d.lesson_id = l.id
@@ -2293,6 +2663,12 @@ function getLessonBatchSummary(db2, lessonId) {
   const telemetry = lessonRunTelemetry.get(String(row.lesson_id));
   const diagnostics = JSON.parse(String(row.diagnostic_logs_json || "[]"));
   const cacheHit = telemetry?.cacheHit ?? diagnostics.some((d) => d.cacheHit === true);
+  const storagePath = row.storage_path ? String(row.storage_path) : "";
+  const fileAvailable = Boolean(storagePath && fs.existsSync(storagePath));
+  const modelRaw = String(row.model_used || DEFAULT_AI_MODEL);
+  const modelUsed = isAllowedAiModel(modelRaw) ? modelRaw : DEFAULT_AI_MODEL;
+  const lastStatusRaw = String(row.last_batch_status || "idle");
+  const lastBatchStatus = lastStatusRaw === "completed" || lastStatusRaw === "paused" || lastStatusRaw === "failed" || lastStatusRaw === "cancelled" ? lastStatusRaw : "idle";
   return {
     id: String(row.batch_id),
     lessonId: String(row.lesson_id),
@@ -2310,15 +2686,24 @@ function getLessonBatchSummary(db2, lessonId) {
     objectives,
     coverageSummary: parsedSummary.coverageSummary ?? "",
     requestedCount: Number(row.requested_count || 10),
+    receivedCount: Number(row.received_count || row.generated_count || 0),
+    acceptedCount: Math.max(actualTotal, Number(row.accepted_count || 0)),
     generatedCount: Number(row.generated_count || 0),
     verifiedCount: actualTotal,
     rejectedCount: Number(row.rejected_count || 0),
     needsReviewCount: Number(counts?.needs_review || 0),
     publishedCount: Number(counts?.published || 0),
     completedBatches: Number(row.completed_batches || 0),
+    failedBatches: Number(row.failed_batches || 0),
     totalBatches: Number(row.total_batches || 0),
     currentBatchSize: Number(row.current_batch_size || 8),
     failedBatchIndex: row.failed_batch_index !== null && row.failed_batch_index !== void 0 ? Number(row.failed_batch_index) : null,
+    lastBatchStatus,
+    errorCategory: row.error_category ? String(row.error_category) : null,
+    modelUsed,
+    startedAt: row.started_at ? String(row.started_at) : null,
+    endedAt: row.ended_at ? String(row.ended_at) : null,
+    fileAvailable,
     statusMessageAr: String(row.status_message_ar || ""),
     insufficientContentNote: String(row.insufficient_content_note || ""),
     diagnosticLogs: diagnostics,
@@ -2363,7 +2748,7 @@ ${existing.slice(0, 15).map((e) => `- ${toCompactFactFingerprint(e.prompt, e.sou
     runner,
     pdfBase64,
     pageSliceText,
-    model: "gemini-4-hydrogen",
+    model: getConfiguredAiModel(db2),
     systemInstruction: "\u0623\u0639\u062F JSON \u0645\u0637\u0627\u0628\u0642\u0627\u064B \u0644\u0644\u0645\u062E\u0637\u0637 \u0641\u0642\u0637. \u0644\u0627 \u062A\u0643\u0631\u0631 \u0648\u0644\u0627 \u062A\u062E\u062A\u0631\u0639 \u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0645\u0646 \u062E\u0627\u0631\u062C \u0627\u0644\u0646\u0635.",
     prompt,
     responseSchema: BATCH_RESPONSE_SCHEMA,
@@ -2541,6 +2926,10 @@ var GameSessionHub = class {
             this.handleBuzz(code, msg.payload.teamIndex);
             return;
           }
+          if (msg.type === "bid_raise" || msg.type === "bid_challenge") {
+            this.handleBidAction(code, msg.type, msg.payload || {}, role === "host");
+            return;
+          }
           if (role === "host") {
             this.handleHostAction(code, msg.type, msg.payload || {});
           }
@@ -2598,6 +2987,9 @@ var GameSessionHub = class {
       if (rem <= 0) {
         session.timerRunning = false;
         session.timerEndsAtMs = null;
+        if (session.bidState && session.bidState.phase === "executing") {
+          session.bidState.phase = "judging";
+        }
         changed = true;
       }
     }
@@ -2657,6 +3049,7 @@ var GameSessionHub = class {
       ageGroup: normalizeAgeGroup(params.ageGroup),
       difficulty: params.difficulty,
       category: params.category || "\u0627\u0644\u0643\u0644",
+      categories: (params.categories ?? []).filter((c) => c && c !== "\u0627\u0644\u0643\u0644"),
       phase: params.skipVs ? "playing" : "vs",
       teams,
       activeTeamIndex: 0,
@@ -2680,6 +3073,7 @@ var GameSessionHub = class {
       memoryPhase: "none",
       memoryRemainingSec: 0,
       memoryEndsAtMs: null,
+      bidState: null,
       exhaustedNotice: null,
       settings,
       currentQuestion: null,
@@ -2781,6 +3175,8 @@ var GameSessionHub = class {
     parsed.previousLeaderIndex = parsed.previousLeaderIndex ?? null;
     parsed.leadChangedAtMs = parsed.leadChangedAtMs ?? null;
     parsed.lastAnsweredSlotKey = parsed.lastAnsweredSlotKey ?? null;
+    parsed.categories = parsed.categories ?? [];
+    parsed.bidState = parsed.bidState ?? null;
     this.sessionCache.set(normCode, parsed);
     return parsed;
   }
@@ -2834,6 +3230,7 @@ var GameSessionHub = class {
       ageGroup: s.ageGroup,
       difficulty: s.difficulty,
       category: s.category,
+      categories: s.categories,
       phase: s.phase,
       teams: s.teams,
       activeTeamIndex: s.activeTeamIndex,
@@ -2854,6 +3251,7 @@ var GameSessionHub = class {
       revealedClueCount: s.revealedClueCount,
       memoryPhase: s.memoryPhase,
       memoryRemainingSec: s.memoryRemainingSec,
+      bidState: s.bidState,
       exhaustedNotice: s.exhaustedNotice,
       settings: s.settings,
       currentQuestion: qView,
@@ -2975,6 +3373,7 @@ var GameSessionHub = class {
       targetDifficultyLevel: adaptiveLevel,
       adaptiveDifficulty: s.settings.adaptiveDifficulty,
       category: s.category,
+      categories: s.categories,
       participantProfileIds: allParticipants,
       sessionId: s.id,
       recentSessionPrompts: s.recentPrompts.slice(-10),
@@ -2982,6 +3381,7 @@ var GameSessionHub = class {
     });
     if (draw.exhausted || !draw.question) {
       s.currentQuestion = null;
+      s.bidState = null;
       s.timerRunning = false;
       s.timerEndsAtMs = null;
       s.exhaustedNotice = {
@@ -3000,8 +3400,31 @@ var GameSessionHub = class {
     s.failedBuzzTeams = [];
     s.lastAnsweredSlotKey = null;
     s.revealedClueCount = 1;
+    const effectiveType = round.roundType === "golden" && round.goldenTargetType ? round.goldenTargetType : round.roundType;
     const now = Date.now();
-    if (round.roundType === "memory" && draw.question.memoryItems.length > 0) {
+    if (effectiveType === "bid_challenge") {
+      const maxPossible = draw.question.acceptableAnswers.length >= 4 ? draw.question.acceptableAnswers.length : 12;
+      const starter = s.activeTeamIndex % Math.max(1, s.teams.length);
+      const nextTurn = s.teams.length > 1 ? (starter + 1) % s.teams.length : starter;
+      s.bidState = {
+        phase: "bidding",
+        currentBid: 1,
+        bidderTeamIndex: starter,
+        startingTeamIndex: starter,
+        turnTeamIndex: nextTurn,
+        maxPossible,
+        challenged: false,
+        acceptedAnswers: [],
+        lastDuplicateWarning: null
+      };
+      s.memoryPhase = "none";
+      s.memoryRemainingSec = 0;
+      s.memoryEndsAtMs = null;
+      s.timerRemainingSec = round.durationSec;
+      s.timerRunning = false;
+      s.timerEndsAtMs = null;
+    } else if (round.roundType === "memory" && draw.question.memoryItems.length > 0) {
+      s.bidState = null;
       const memSec = draw.question.memoryRevealSeconds || round.memoryRevealSec || 8;
       s.memoryPhase = "memorize";
       s.memoryRemainingSec = memSec;
@@ -3010,6 +3433,7 @@ var GameSessionHub = class {
       s.timerRemainingSec = round.durationSec;
       s.timerEndsAtMs = null;
     } else {
+      s.bidState = null;
       s.memoryPhase = "none";
       s.memoryRemainingSec = 0;
       s.memoryEndsAtMs = null;
@@ -3047,6 +3471,171 @@ var GameSessionHub = class {
     this.saveSession(s);
     this.broadcast(code);
     return this.projectView(s, false);
+  }
+  completeBidChallengeInternal(s) {
+    const round = s.rounds[s.currentRoundIndex];
+    if (!round || !s.bidState || s.answerRevealed) return;
+    const slotKey = this.buildCurrentSlotKey(s);
+    if (slotKey && s.lastAnsweredSlotKey === slotKey) return;
+    this.pushUndo(s, "\u062D\u0633\u0645 \u062C\u0648\u0644\u0629 \u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F");
+    const result = resolveBidChallengePoints({
+      currentBid: s.bidState.currentBid,
+      bidderTeamIndex: s.bidState.bidderTeamIndex,
+      acceptedCount: s.bidState.acceptedAnswers.length,
+      teamCount: s.teams.length,
+      multiplier: round.multiplier
+    });
+    const winnerTeam = s.teams[result.winnerTeamIndex];
+    if (winnerTeam && result.pointsAwarded > 0) {
+      winnerTeam.points += result.pointsAwarded;
+      winnerTeam.streak += 1;
+      for (const pid of winnerTeam.participantIds) {
+        if (!pid || pid.startsWith("guest-")) continue;
+        this.db.prepare(`UPDATE profiles SET total_correct = total_correct + 1, xp = xp + ? WHERE id = ?`).run(result.pointsAwarded, pid);
+      }
+      this.recordAudit(
+        s,
+        result.winnerTeamIndex,
+        result.pointsAwarded,
+        result.succeeded ? `\u0646\u062C\u0627\u062D \u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F (${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid})` : `\u0641\u0648\u0632 \u0627\u0644\u062E\u0635\u0645 \u0628\u062A\u062D\u062F\u064A \u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F (${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid})`
+      );
+    }
+    if (!result.succeeded && s.teams[s.bidState.bidderTeamIndex]) {
+      s.teams[s.bidState.bidderTeamIndex].streak = 0;
+    }
+    s.stats.totalAnswered += 1;
+    if (result.succeeded) s.stats.totalCorrect += 1;
+    if (s.currentQuestion) {
+      this.db.prepare(
+        `INSERT INTO answers (id, session_id, question_id, team_index, profile_id, submitted_answer, is_correct, points_delta)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        `ans-${crypto4.randomUUID().slice(0, 8)}`,
+        s.id,
+        s.currentQuestion.id,
+        s.bidState.bidderTeamIndex,
+        null,
+        s.bidState.acceptedAnswers.join("\u060C ") || "\u0644\u0645 \u062A\u0643\u062A\u0645\u0644 \u0627\u0644\u0625\u062C\u0627\u0628\u0627\u062A",
+        result.succeeded ? 1 : 0,
+        result.pointsAwarded
+      );
+    }
+    const leadChanged = this.updateLeaderState(s);
+    const bidderName = s.teams[s.bidState.bidderTeamIndex]?.name ?? "\u0627\u0644\u0645\u0632\u0627\u064A\u062F";
+    s.lastFeedback = {
+      type: result.succeeded ? leadChanged ? "lead_change" : "correct" : "wrong",
+      message: result.succeeded ? `\u0646\u062C\u062D ${bidderName} \u0641\u064A \u0630\u0643\u0631 ${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid}! +${result.pointsAwarded} \u0646\u0642\u0627\u0637` : `\u062A\u0648\u0642\u0651\u0641 ${bidderName} \u0639\u0646\u062F ${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid} \u2014 \u0643\u0633\u0628 ${winnerTeam?.name ?? "\u0627\u0644\u0645\u0646\u0627\u0641\u0633"} +${result.pointsAwarded} \u0646\u0642\u0637\u062A\u064A\u0646`,
+      pointsDelta: result.pointsAwarded,
+      teamIndex: result.winnerTeamIndex,
+      atMs: Date.now()
+    };
+    if (slotKey) s.lastAnsweredSlotKey = slotKey;
+    s.bidState.phase = "judging";
+    s.answerRevealed = true;
+    s.timerRunning = false;
+    s.timerEndsAtMs = null;
+  }
+  handleBidAction(code, action, payload = {}, isHost = false) {
+    const s = this.getSessionInternal(code);
+    if (!s || s.phase !== "playing" || !s.bidState) return null;
+    this.syncLiveTimer(s);
+    const round = s.rounds[s.currentRoundIndex];
+    if (!round) return null;
+    const stripAl = (txt) => normalizeArabicText(txt).replace(/^ال/, "");
+    if (action === "bid_raise") {
+      if (s.bidState.phase !== "bidding") {
+        return { ok: false, error: "\u0627\u0646\u062A\u0647\u062A \u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u0648\u0628\u062F\u0623 \u0627\u0644\u062A\u0646\u0641\u064A\u0630.", view: this.projectView(s, isHost) };
+      }
+      const teamIdx = typeof payload.teamIndex === "number" ? payload.teamIndex : s.bidState.turnTeamIndex;
+      if (teamIdx < 0 || teamIdx >= s.teams.length) {
+        return { ok: false, error: "\u0627\u0644\u0641\u0631\u064A\u0642 \u0627\u0644\u0645\u062D\u062F\u062F \u063A\u064A\u0631 \u0635\u0627\u0644\u062D.", view: this.projectView(s, isHost) };
+      }
+      const inc = Number(payload.increment ?? 1);
+      const targetBid = typeof payload.targetBid === "number" ? Math.round(payload.targetBid) : s.bidState.currentBid + (inc >= 2 ? 2 : 1);
+      if (targetBid <= s.bidState.currentBid || targetBid > s.bidState.maxPossible) {
+        return {
+          ok: false,
+          error: `\u0627\u0644\u0639\u062F\u062F \u064A\u062C\u0628 \u0623\u0646 \u064A\u0643\u0648\u0646 \u0628\u064A\u0646 ${s.bidState.currentBid + 1} \u0648${s.bidState.maxPossible}.`,
+          view: this.projectView(s, isHost)
+        };
+      }
+      s.bidState.currentBid = targetBid;
+      s.bidState.bidderTeamIndex = teamIdx;
+      s.bidState.turnTeamIndex = s.teams.length > 1 ? (teamIdx + 1) % s.teams.length : teamIdx;
+      s.bidState.lastDuplicateWarning = null;
+      if (targetBid >= s.bidState.maxPossible) {
+        s.bidState.phase = "executing";
+        s.bidState.challenged = true;
+        s.activeTeamIndex = teamIdx;
+        s.timerRemainingSec = round.durationSec;
+        s.timerRunning = true;
+        s.timerEndsAtMs = Date.now() + round.durationSec * 1e3;
+      }
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, isHost) };
+    }
+    if (action === "bid_challenge" || action === "bid_pass") {
+      if (s.bidState.phase !== "bidding") {
+        return { ok: false, error: "\u0628\u062F\u0623 \u0627\u0644\u062A\u062D\u062F\u064A \u0628\u0627\u0644\u0641\u0639\u0644.", view: this.projectView(s, isHost) };
+      }
+      s.bidState.phase = "executing";
+      s.bidState.challenged = true;
+      s.activeTeamIndex = s.bidState.bidderTeamIndex;
+      s.bidState.lastDuplicateWarning = null;
+      s.timerRemainingSec = round.durationSec;
+      s.timerRunning = true;
+      s.timerEndsAtMs = Date.now() + round.durationSec * 1e3;
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, isHost) };
+    }
+    if (action === "bid_record_answer") {
+      if (s.bidState.phase === "bidding" || s.answerRevealed) {
+        return { ok: false, error: "\u0627\u0644\u062A\u062D\u062F\u064A \u0644\u064A\u0633 \u0641\u064A \u0645\u0631\u062D\u0644\u0629 \u0627\u0633\u062A\u0642\u0628\u0627\u0644 \u0627\u0644\u0625\u062C\u0627\u0628\u0627\u062A.", view: this.projectView(s, isHost) };
+      }
+      const raw = String(payload.answerText || "").trim();
+      const norm = stripAl(raw);
+      if (!norm) {
+        return { ok: false, error: "\u0623\u062F\u062E\u0644 \u0625\u062C\u0627\u0628\u0629 \u063A\u064A\u0631 \u0641\u0627\u0631\u063A\u0629.", view: this.projectView(s, isHost) };
+      }
+      const isDup = s.bidState.acceptedAnswers.some((existing) => stripAl(existing) === norm);
+      if (isDup) {
+        s.bidState.lastDuplicateWarning = `\u0627\u0644\u0625\u062C\u0627\u0628\u0629 \xAB${raw}\xBB \u0645\u0643\u0631\u0631\u0629 \u0641\u064A \u0647\u0630\u0647 \u0627\u0644\u062C\u0648\u0644\u0629 \u0648\u0644\u0627 \u062A\u064F\u062D\u062A\u0633\u0628 \u0645\u0631\u062A\u064A\u0646.`;
+        this.saveSession(s);
+        this.broadcast(code);
+        return { ok: false, error: s.bidState.lastDuplicateWarning, view: this.projectView(s, isHost) };
+      }
+      const hostConfirmed = Boolean(isHost && payload.hostConfirmed !== false);
+      const acceptable = s.currentQuestion?.acceptableAnswers ?? [];
+      if (!hostConfirmed && acceptable.length > 0) {
+        const matched = acceptable.some((acc) => {
+          const accNorm = stripAl(acc);
+          return accNorm === norm || norm.length >= 3 && (accNorm.includes(norm) || norm.includes(accNorm));
+        });
+        if (!matched) {
+          s.bidState.lastDuplicateWarning = `\u0627\u0644\u0625\u062C\u0627\u0628\u0629 \xAB${raw}\xBB \u063A\u064A\u0631 \u0645\u0637\u0627\u0628\u0642\u0629 \u0644\u0642\u0627\u0626\u0645\u0629 \u0647\u0630\u0627 \u0627\u0644\u062A\u062D\u062F\u064A.`;
+          this.saveSession(s);
+          this.broadcast(code);
+          return { ok: false, error: s.bidState.lastDuplicateWarning, view: this.projectView(s, isHost) };
+        }
+      }
+      s.bidState.lastDuplicateWarning = null;
+      s.bidState.acceptedAnswers.push(raw);
+      if (s.bidState.acceptedAnswers.length >= s.bidState.currentBid) {
+        this.completeBidChallengeInternal(s);
+      }
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, isHost) };
+    }
+    if (action === "bid_complete" && isHost) {
+      this.completeBidChallengeInternal(s);
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, true) };
+    }
+    return null;
   }
   submitPlayerAnswer(code, teamIndex, submitted, profileId) {
     const s = this.getSessionInternal(code);
@@ -3482,8 +4071,17 @@ var GameSessionHub = class {
         }
         break;
       }
+      case "bid_raise":
+      case "bid_challenge":
+      case "bid_pass":
+      case "bid_record_answer":
+      case "bid_complete": {
+        this.handleBidAction(code, action, payload, true);
+        break;
+      }
       case "switch_category": {
         s.category = String(payload.category || "\u0627\u0644\u0643\u0644");
+        s.categories = Array.isArray(payload.categories) ? payload.categories.map((c) => String(c)).filter((c) => c && c !== "\u0627\u0644\u0643\u0644") : s.category !== "\u0627\u0644\u0643\u0644" ? [s.category] : [];
         this.drawQuestionForCurrentSlot(s, true);
         break;
       }
@@ -3678,15 +4276,37 @@ function createAppAndHub(db2) {
     const ageGroup = normalizeAgeGroup(String(req.query.ageGroup || "family"));
     const difficulty = String(req.query.difficulty || "mixed");
     const category = req.query.category ? String(req.query.category) : void 0;
+    const categories = req.query.categories ? String(req.query.categories).split(",").map((c) => c.trim()).filter(Boolean) : void 0;
     const participantIds = req.query.participantIds ? String(req.query.participantIds).split(",").filter(Boolean) : [];
     const availability = getBankAvailability(db2, {
       bankId,
       ageGroup,
       difficulty,
       category,
+      categories,
       participantProfileIds: participantIds
     });
     res.json(availability);
+  });
+  app2.get("/api/settings/ai-model", requireRole(["admin", "teacher"]), (_req, res) => {
+    const model = getConfiguredAiModel(db2);
+    res.json({
+      model,
+      allowedModels: ALLOWED_AI_MODELS,
+      freeTierNoticeAr: "\u064A\u0633\u062A\u062E\u062F\u0645 \u0627\u0633\u062A\u0648\u062F\u064A\u0648 PDF \u062D\u0635\u0631\u064A\u0627\u064B \u0646\u0645\u0627\u0630\u062C Gemini Flash \u0636\u0645\u0646 \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 (Free Tier) \u0628\u062D\u062F\u0648\u062F \u0637\u0644\u0628\u0627\u062A \u064A\u0648\u0645\u064A\u0629 \u0648\u0644\u062D\u0638\u064A\u0629 \u0644\u064A\u0633\u062A \u0628\u0644\u0627 \u062D\u062F\u0648\u062F\u060C \u0648\u0644\u0627 \u064A\u064F\u0633\u062A\u062E\u062F\u0645 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0645\u0628\u0627\u0631\u064A\u0627\u062A \u0627\u0644\u0639\u0627\u062F\u064A\u0629 \u0625\u0637\u0644\u0627\u0642\u0627\u064B."
+    });
+  });
+  app2.put("/api/settings/ai-model", requireRole(["admin", "teacher"]), (req, res) => {
+    try {
+      const { model } = req.body;
+      const updated = setConfiguredAiModel(db2, String(model || ""));
+      res.json({
+        model: updated,
+        allowedModels: ALLOWED_AI_MODELS
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "\u0627\u0644\u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0645\u062E\u062A\u0627\u0631 \u063A\u064A\u0631 \u0645\u062F\u0639\u0648\u0645" });
+    }
   });
   app2.get("/api/banks/:bankId/questions", requireRole(["admin", "teacher"]), (req, res) => {
     const { bankId } = req.params;
@@ -4073,6 +4693,7 @@ data: ${JSON.stringify(data)}
         ageGroup: normalizeAgeGroup(body.ageGroup || "family"),
         difficulty: body.difficulty || "mixed",
         category: body.category || "\u0627\u0644\u0643\u0644",
+        categories: body.categories,
         teams: body.teams || [],
         roundTypes: body.roundTypes || ["rapid_fire", "multiple_choice", "who_am_i", "buzzer", "golden"],
         roundOverrides: body.roundOverrides,
@@ -4167,6 +4788,30 @@ data: ${JSON.stringify(data)}
       return;
     }
     res.json({ session: view });
+  });
+  app2.post("/api/sessions/:code/bid", (req, res) => {
+    const s = hub2.getSessionInternal(req.params.code);
+    if (!s) {
+      res.status(404).json({ error: "\u0627\u0644\u062C\u0644\u0633\u0629 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F\u0629" });
+      return;
+    }
+    const { action, payload } = req.body;
+    const allowedPlayerActions = ["bid_raise", "bid_challenge", "bid_pass", "bid_record_answer"];
+    if (!allowedPlayerActions.includes(action)) {
+      res.status(403).json({ error: "\u0625\u062C\u0631\u0627\u0621 \u0627\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0628\u0647" });
+      return;
+    }
+    const isAuthorizedHost = !s.hostProfileId || req.user && (req.user.role === "admin" || req.user.role === "teacher" || req.user.id === s.hostProfileId);
+    const result = hub2.handleBidAction(req.params.code, action, payload || {}, Boolean(isAuthorizedHost));
+    if (!result) {
+      res.status(400).json({ error: "\u062C\u0648\u0644\u0629 \u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F \u063A\u064A\u0631 \u0646\u0634\u0637\u0629 \u062D\u0627\u0644\u064A\u0627\u064B" });
+      return;
+    }
+    if (!result.ok) {
+      res.status(409).json({ error: result.error, session: result.view });
+      return;
+    }
+    res.json({ session: result.view });
   });
   return { app: app2, hub: hub2 };
 }
@@ -4371,6 +5016,12 @@ function createDatabase(dbPath) {
       UNIQUE(session_id, team_index)
     );
 
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS lesson_question_batches (
       id TEXT PRIMARY KEY,
       lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
@@ -4378,14 +5029,22 @@ function createDatabase(dbPath) {
       pipeline_stage TEXT NOT NULL,
       stage_logs_json TEXT NOT NULL DEFAULT '[]',
       requested_count INTEGER NOT NULL DEFAULT 10,
+      received_count INTEGER NOT NULL DEFAULT 0,
+      accepted_count INTEGER NOT NULL DEFAULT 0,
       generated_count INTEGER NOT NULL DEFAULT 0,
       verified_count INTEGER NOT NULL DEFAULT 0,
       rejected_count INTEGER NOT NULL DEFAULT 0,
       plan_json TEXT NOT NULL DEFAULT '[]',
       completed_batches INTEGER NOT NULL DEFAULT 0,
+      failed_batches INTEGER NOT NULL DEFAULT 0,
       total_batches INTEGER NOT NULL DEFAULT 0,
       current_batch_size INTEGER NOT NULL DEFAULT 8,
       failed_batch_index INTEGER,
+      last_batch_status TEXT NOT NULL DEFAULT 'idle',
+      error_category TEXT,
+      model_used TEXT NOT NULL DEFAULT 'gemini-4-hydrogen',
+      started_at TEXT,
+      ended_at TEXT,
       status_message_ar TEXT DEFAULT '',
       diagnostic_logs_json TEXT NOT NULL DEFAULT '[]',
       insufficient_content_note TEXT DEFAULT '',
@@ -4416,10 +5075,18 @@ function createDatabase(dbPath) {
   ensureColumn("questions", "difficulty_level", "INTEGER NOT NULL DEFAULT 3");
   ensureColumn("questions", "unsuitable_for_timed", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("lesson_question_batches", "plan_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn("lesson_question_batches", "received_count", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("lesson_question_batches", "accepted_count", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("lesson_question_batches", "completed_batches", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("lesson_question_batches", "failed_batches", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("lesson_question_batches", "total_batches", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("lesson_question_batches", "current_batch_size", "INTEGER NOT NULL DEFAULT 8");
   ensureColumn("lesson_question_batches", "failed_batch_index", "INTEGER");
+  ensureColumn("lesson_question_batches", "last_batch_status", "TEXT NOT NULL DEFAULT 'idle'");
+  ensureColumn("lesson_question_batches", "error_category", "TEXT");
+  ensureColumn("lesson_question_batches", "model_used", "TEXT NOT NULL DEFAULT 'gemini-4-hydrogen'");
+  ensureColumn("lesson_question_batches", "started_at", "TEXT");
+  ensureColumn("lesson_question_batches", "ended_at", "TEXT");
   ensureColumn("lesson_question_batches", "status_message_ar", "TEXT DEFAULT ''");
   ensureColumn("lesson_question_batches", "diagnostic_logs_json", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("lesson_question_batches", "insufficient_content_note", "TEXT DEFAULT ''");
@@ -5165,6 +5832,229 @@ var SEED_QUESTIONS = [
     acceptableAnswers: ["\u0639\u0644\u064A \u0628\u0646 \u0623\u0628\u064A \u0637\u0627\u0644\u0628", "\u0639\u0644\u064A"],
     explanation: "\u0639\u0644\u064A \u0628\u0646 \u0623\u0628\u064A \u0637\u0627\u0644\u0628 \u0631\u0636\u064A \u0627\u0644\u0644\u0647 \u0639\u0646\u0647 \u0643\u062A\u0628 \u0628\u0646\u0648\u062F \u0635\u0644\u062D \u0627\u0644\u062D\u062F\u064A\u0628\u064A\u0629.",
     isReligious: true
+  },
+  // 12. bid_challenge (مين يزوّد) & curated category packs
+  {
+    externalId: "BID-01",
+    roundType: "bid_challenge",
+    category: "\u0627\u0644\u0623\u0631\u062F\u0646 \u0648\u0627\u0644\u0639\u0627\u0644\u0645 \u0627\u0644\u0639\u0631\u0628\u064A",
+    ageGroup: "family",
+    difficulty: "medium",
+    difficultyLevel: 3,
+    prompt: "\u0643\u0645 \u0645\u062D\u0627\u0641\u0638\u0629 \u0641\u064A \u0627\u0644\u0645\u0645\u0644\u0643\u0629 \u0627\u0644\u0623\u0631\u062F\u0646\u064A\u0629 \u0627\u0644\u0647\u0627\u0634\u0645\u064A\u0629 \u062A\u0633\u062A\u0637\u064A\u0639 \u062A\u0633\u0645\u064A\u062A\u0647\u0627 \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629\u061F",
+    acceptableAnswers: [
+      "\u0639\u0645\u0627\u0646",
+      "\u0627\u0644\u0639\u0627\u0635\u0645\u0629",
+      "\u0625\u0631\u0628\u062F",
+      "\u0627\u0644\u0632\u0631\u0642\u0627\u0621",
+      "\u0627\u0644\u0628\u0644\u0642\u0627\u0621",
+      "\u0645\u0623\u062F\u0628\u0627",
+      "\u0627\u0644\u0645\u0641\u0631\u0642",
+      "\u062C\u0631\u0634",
+      "\u0639\u062C\u0644\u0648\u0646",
+      "\u0627\u0644\u0643\u0631\u0643",
+      "\u0627\u0644\u0637\u0641\u064A\u0644\u0629",
+      "\u0645\u0639\u0627\u0646",
+      "\u0627\u0644\u0639\u0642\u0628\u0629"
+    ],
+    explanation: "\u0645\u062D\u0627\u0641\u0638\u0627\u062A \u0627\u0644\u0623\u0631\u062F\u0646 \u0627\u0644\u0627\u062B\u0646\u062A\u0627 \u0639\u0634\u0631\u0629 \u0645\u0646 \u0627\u0644\u0634\u0645\u0627\u0644 \u0625\u0644\u0649 \u0627\u0644\u062C\u0646\u0648\u0628.",
+    isReligious: false
+  },
+  {
+    externalId: "BID-02",
+    roundType: "bid_challenge",
+    category: "\u0627\u0644\u0635\u062D\u0627\u0628\u0629",
+    ageGroup: "youth",
+    difficulty: "medium",
+    difficultyLevel: 3,
+    prompt: "\u0643\u0645 \u0635\u062D\u0627\u0628\u064A\u0627\u064B \u0645\u0646 \u0627\u0644\u0639\u0634\u0631\u0629 \u0627\u0644\u0645\u0628\u0634\u0631\u064A\u0646 \u0628\u0627\u0644\u062C\u0646\u0629 \u062A\u0633\u062A\u0637\u064A\u0639 \u0630\u0643\u0631\u0647 \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629\u061F",
+    acceptableAnswers: [
+      "\u0623\u0628\u0648 \u0628\u0643\u0631 \u0627\u0644\u0635\u062F\u064A\u0642",
+      "\u0639\u0645\u0631 \u0628\u0646 \u0627\u0644\u062E\u0637\u0627\u0628",
+      "\u0639\u062B\u0645\u0627\u0646 \u0628\u0646 \u0639\u0641\u0627\u0646",
+      "\u0639\u0644\u064A \u0628\u0646 \u0623\u0628\u064A \u0637\u0627\u0644\u0628",
+      "\u0637\u0644\u062D\u0629 \u0628\u0646 \u0639\u0628\u064A\u062F \u0627\u0644\u0644\u0647",
+      "\u0627\u0644\u0632\u0628\u064A\u0631 \u0628\u0646 \u0627\u0644\u0639\u0648\u0627\u0645",
+      "\u0639\u0628\u062F \u0627\u0644\u0631\u062D\u0645\u0646 \u0628\u0646 \u0639\u0648\u0641",
+      "\u0633\u0639\u062F \u0628\u0646 \u0623\u0628\u064A \u0648\u0642\u0627\u0635",
+      "\u0633\u0639\u064A\u062F \u0628\u0646 \u0632\u064A\u062F",
+      "\u0623\u0628\u0648 \u0639\u0628\u064A\u062F\u0629 \u0628\u0646 \u0627\u0644\u062C\u0631\u0627\u062D"
+    ],
+    explanation: "\u0627\u0644\u0639\u0634\u0631\u0629 \u0627\u0644\u0645\u0628\u0634\u0631\u0648\u0646 \u0628\u0627\u0644\u062C\u0646\u0629 \u0627\u0644\u0645\u0630\u0643\u0648\u0631\u0648\u0646 \u0641\u064A \u0627\u0644\u062D\u062F\u064A\u062B \u0627\u0644\u0635\u062D\u064A\u062D.",
+    isReligious: true
+  },
+  {
+    externalId: "BID-03",
+    roundType: "bid_challenge",
+    category: "\u0642\u0635\u0635 \u0627\u0644\u0623\u0646\u0628\u064A\u0627\u0621",
+    ageGroup: "family",
+    difficulty: "easy",
+    difficultyLevel: 2,
+    prompt: "\u0643\u0645 \u0646\u0628\u064A\u0627\u064B \u0645\u0646 \u0627\u0644\u0623\u0646\u0628\u064A\u0627\u0621 \u0627\u0644\u0645\u0630\u0643\u0648\u0631\u064A\u0646 \u0641\u064A \u0627\u0644\u0642\u0631\u0622\u0646 \u0627\u0644\u0643\u0631\u064A\u0645 \u062A\u0633\u062A\u0637\u064A\u0639 \u0630\u0643\u0631 \u0627\u0633\u0645\u0647 \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629\u061F",
+    acceptableAnswers: [
+      "\u0622\u062F\u0645",
+      "\u0625\u062F\u0631\u064A\u0633",
+      "\u0646\u0648\u062D",
+      "\u0647\u0648\u062F",
+      "\u0635\u0627\u0644\u062D",
+      "\u0625\u0628\u0631\u0627\u0647\u064A\u0645",
+      "\u0644\u0648\u0637",
+      "\u0625\u0633\u0645\u0627\u0639\u064A\u0644",
+      "\u0625\u0633\u062D\u0627\u0642",
+      "\u064A\u0639\u0642\u0648\u0628",
+      "\u064A\u0648\u0633\u0641",
+      "\u0623\u064A\u0648\u0628",
+      "\u0634\u0639\u064A\u0628",
+      "\u0645\u0648\u0633\u0649",
+      "\u0647\u0627\u0631\u0648\u0646",
+      "\u062F\u0627\u0648\u062F",
+      "\u0633\u0644\u064A\u0645\u0627\u0646",
+      "\u0625\u0644\u064A\u0627\u0633",
+      "\u0627\u0644\u064A\u0633\u0639",
+      "\u064A\u0648\u0646\u0633",
+      "\u0630\u0648 \u0627\u0644\u0643\u0641\u0644",
+      "\u0632\u0643\u0631\u064A\u0627",
+      "\u064A\u062D\u064A\u0649",
+      "\u0639\u064A\u0633\u0649",
+      "\u0645\u062D\u0645\u062F"
+    ],
+    explanation: "\u0630\u064F\u0643\u0631 \u062E\u0645\u0633\u0629 \u0648\u0639\u0634\u0631\u0648\u0646 \u0646\u0628\u064A\u0627\u064B \u0648\u0631\u0633\u0648\u0644\u0627\u064B \u0628\u0627\u0644\u0627\u0633\u0645 \u0641\u064A \u0627\u0644\u0642\u0631\u0622\u0646 \u0627\u0644\u0643\u0631\u064A\u0645.",
+    isReligious: true
+  },
+  {
+    externalId: "BID-04",
+    roundType: "bid_challenge",
+    category: "\u0627\u0644\u0642\u0631\u0622\u0646 \u0627\u0644\u0643\u0631\u064A\u0645",
+    ageGroup: "kids_7_10",
+    difficulty: "easy",
+    difficultyLevel: 1,
+    prompt: "\u0643\u0645 \u0633\u0648\u0631\u0629 \u0645\u0646 \u0642\u0635\u0627\u0631 \u0633\u0648\u0631 \u062C\u0632\u0621 \u0639\u0645\u0651 \u062A\u0633\u062A\u0637\u064A\u0639 \u062A\u0633\u0645\u064A\u062A\u0647\u0627 \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629\u061F",
+    acceptableAnswers: [
+      "\u0627\u0644\u0646\u0627\u0633",
+      "\u0627\u0644\u0641\u0644\u0642",
+      "\u0627\u0644\u0625\u062E\u0644\u0627\u0635",
+      "\u0627\u0644\u0645\u0633\u062F",
+      "\u0627\u0644\u0646\u0635\u0631",
+      "\u0627\u0644\u0643\u0627\u0641\u0631\u0648\u0646",
+      "\u0627\u0644\u0643\u0648\u062B\u0631",
+      "\u0627\u0644\u0645\u0627\u0639\u0648\u0646",
+      "\u0642\u0631\u064A\u0634",
+      "\u0627\u0644\u0641\u064A\u0644",
+      "\u0627\u0644\u0647\u0645\u0632\u0629",
+      "\u0627\u0644\u0639\u0635\u0631",
+      "\u0627\u0644\u062A\u0643\u0627\u062B\u0631",
+      "\u0627\u0644\u0642\u0627\u0631\u0639\u0629",
+      "\u0627\u0644\u0639\u0627\u062F\u064A\u0627\u062A",
+      "\u0627\u0644\u0632\u0644\u0632\u0644\u0629",
+      "\u0627\u0644\u0628\u064A\u0646\u0629",
+      "\u0627\u0644\u0642\u062F\u0631",
+      "\u0627\u0644\u0639\u0644\u0642",
+      "\u0627\u0644\u062A\u064A\u0646",
+      "\u0627\u0644\u0634\u0631\u062D",
+      "\u0627\u0644\u0636\u062D\u0649"
+    ],
+    explanation: "\u0645\u0646 \u0642\u0635\u0627\u0631 \u0627\u0644\u0633\u0648\u0631 \u0627\u0644\u0645\u0643\u064A\u0629 \u0648\u0627\u0644\u0645\u062F\u0646\u064A\u0629 \u0641\u064A \u062C\u0632\u0621 \u0639\u0645.",
+    isReligious: true
+  },
+  {
+    externalId: "BID-05",
+    roundType: "bid_challenge",
+    category: "\u0627\u0644\u062C\u063A\u0631\u0627\u0641\u064A\u0627",
+    ageGroup: "youth",
+    difficulty: "medium",
+    difficultyLevel: 3,
+    prompt: "\u0643\u0645 \u062F\u0648\u0644\u0629 \u0639\u0631\u0628\u064A\u0629 \u062A\u0642\u0639 \u0641\u064A \u0642\u0627\u0631\u0629 \u0623\u0641\u0631\u064A\u0642\u064A\u0627 \u062A\u0633\u062A\u0637\u064A\u0639 \u0630\u0643\u0631\u0647\u0627 \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629\u061F",
+    acceptableAnswers: [
+      "\u0645\u0635\u0631",
+      "\u0627\u0644\u0633\u0648\u062F\u0627\u0646",
+      "\u0644\u064A\u0628\u064A\u0627",
+      "\u062A\u0648\u0646\u0633",
+      "\u0627\u0644\u062C\u0632\u0627\u0626\u0631",
+      "\u0627\u0644\u0645\u063A\u0631\u0628",
+      "\u0645\u0648\u0631\u064A\u062A\u0627\u0646\u064A\u0627",
+      "\u0627\u0644\u0635\u0648\u0645\u0627\u0644",
+      "\u062C\u064A\u0628\u0648\u062A\u064A",
+      "\u062C\u0632\u0631 \u0627\u0644\u0642\u0645\u0631"
+    ],
+    explanation: "\u062A\u0636\u0645 \u0642\u0627\u0631\u0629 \u0623\u0641\u0631\u064A\u0642\u064A\u0627 \u0639\u0634\u0631 \u062F\u0648\u0644 \u0639\u0631\u0628\u064A\u0629 \u0645\u0646 \u062C\u0627\u0645\u0639\u0629 \u0627\u0644\u062F\u0648\u0644 \u0627\u0644\u0639\u0631\u0628\u064A\u0629.",
+    isReligious: false
+  },
+  {
+    externalId: "BID-06",
+    roundType: "bid_challenge",
+    category: "\u0627\u0644\u0631\u064A\u0627\u0636\u0629 \u0648\u0643\u0631\u0629 \u0627\u0644\u0642\u062F\u0645",
+    ageGroup: "family",
+    difficulty: "medium",
+    difficultyLevel: 3,
+    prompt: "\u0643\u0645 \u0645\u0646\u062A\u062E\u0628\u0627\u064B \u0641\u0627\u0632 \u0628\u0643\u0623\u0633 \u0627\u0644\u0639\u0627\u0644\u0645 \u0644\u0643\u0631\u0629 \u0627\u0644\u0642\u062F\u0645 \u0639\u0628\u0631 \u0627\u0644\u062A\u0627\u0631\u064A\u062E \u062A\u0633\u062A\u0637\u064A\u0639 \u0630\u0643\u0631\u0647 \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629\u061F",
+    acceptableAnswers: [
+      "\u0627\u0644\u0628\u0631\u0627\u0632\u064A\u0644",
+      "\u0623\u0644\u0645\u0627\u0646\u064A\u0627",
+      "\u0625\u064A\u0637\u0627\u0644\u064A\u0627",
+      "\u0627\u0644\u0623\u0631\u062C\u0646\u062A\u064A\u0646",
+      "\u0641\u0631\u0646\u0633\u0627",
+      "\u0627\u0644\u0623\u0648\u0631\u0648\u063A\u0648\u0627\u064A",
+      "\u0625\u0646\u062C\u0644\u062A\u0631\u0627",
+      "\u0625\u0633\u0628\u0627\u0646\u064A\u0627"
+    ],
+    explanation: "\u062B\u0645\u0627\u0646\u064A\u0629 \u0645\u0646\u062A\u062E\u0628\u0627\u062A \u0641\u0642\u0637 \u062A\u0648\u062C\u062A \u0628\u0644\u0642\u0628 \u0643\u0623\u0633 \u0627\u0644\u0639\u0627\u0644\u0645 \u0645\u0646\u0630 \u0639\u0627\u0645 1930.",
+    isReligious: false
+  },
+  {
+    externalId: "MC-PR-01",
+    roundType: "multiple_choice",
+    category: "\u0642\u0635\u0635 \u0627\u0644\u0623\u0646\u0628\u064A\u0627\u0621",
+    ageGroup: "kids_7_10",
+    difficulty: "easy",
+    difficultyLevel: 2,
+    prompt: "\u0645\u0627 \u0627\u0644\u0633\u0641\u064A\u0646\u0629 \u0627\u0644\u0639\u0638\u064A\u0645\u0629 \u0627\u0644\u062A\u064A \u0623\u0645\u0631 \u0627\u0644\u0644\u0647 \u0646\u0628\u064A\u0627\u064B \u0628\u0635\u0646\u0639\u0647\u0627 \u0644\u064A\u0646\u062C\u0648 \u0627\u0644\u0645\u0624\u0645\u0646\u0648\u0646 \u0645\u0646 \u0627\u0644\u0637\u0648\u0641\u0627\u0646\u061F",
+    options: ["\u0633\u0641\u064A\u0646\u0629 \u0646\u0648\u062D \u0639\u0644\u064A\u0647 \u0627\u0644\u0633\u0644\u0627\u0645", "\u0633\u0641\u064A\u0646\u0629 \u0633\u0644\u064A\u0645\u0627\u0646 \u0639\u0644\u064A\u0647 \u0627\u0644\u0633\u0644\u0627\u0645", "\u0633\u0641\u064A\u0646\u0629 \u0647\u0648\u062F \u0639\u0644\u064A\u0647 \u0627\u0644\u0633\u0644\u0627\u0645", "\u0633\u0641\u064A\u0646\u0629 \u0635\u0627\u0644\u062D \u0639\u0644\u064A\u0647 \u0627\u0644\u0633\u0644\u0627\u0645"],
+    acceptableAnswers: ["\u0633\u0641\u064A\u0646\u0629 \u0646\u0648\u062D \u0639\u0644\u064A\u0647 \u0627\u0644\u0633\u0644\u0627\u0645", "\u0646\u0648\u062D"],
+    correctIndex: 0,
+    explanation: "\u0635\u0646\u0639 \u0646\u0648\u062D \u0639\u0644\u064A\u0647 \u0627\u0644\u0633\u0644\u0627\u0645 \u0627\u0644\u0641\u0644\u0643 \u0628\u0623\u0645\u0631 \u0627\u0644\u0644\u0647 \u0648\u0646\u062C\u0627 \u0648\u0645\u0646 \u0622\u0645\u0646 \u0645\u0639\u0647.",
+    isReligious: true
+  },
+  {
+    externalId: "MC-SP-01",
+    roundType: "multiple_choice",
+    category: "\u0627\u0644\u0631\u064A\u0627\u0636\u0629 \u0648\u0643\u0631\u0629 \u0627\u0644\u0642\u062F\u0645",
+    ageGroup: "youth",
+    difficulty: "easy",
+    difficultyLevel: 2,
+    prompt: "\u0643\u0645 \u062F\u0642\u064A\u0642\u0629 \u0645\u062F\u0629 \u0627\u0644\u0634\u0648\u0637\u064A\u0646 \u0627\u0644\u0623\u0635\u0644\u064A\u064A\u0646 \u0641\u064A \u0645\u0628\u0627\u0631\u0627\u0629 \u0643\u0631\u0629 \u0627\u0644\u0642\u062F\u0645 \u0627\u0644\u0631\u0633\u0645\u064A\u0629\u061F",
+    options: ["60 \u062F\u0642\u064A\u0642\u0629", "80 \u062F\u0642\u064A\u0642\u0629", "90 \u062F\u0642\u064A\u0642\u0629", "120 \u062F\u0642\u064A\u0642\u0629"],
+    acceptableAnswers: ["90 \u062F\u0642\u064A\u0642\u0629", "90"],
+    correctIndex: 2,
+    explanation: "\u062A\u062A\u0643\u0648\u0646 \u0627\u0644\u0645\u0628\u0627\u0631\u0627\u0629 \u0645\u0646 \u0634\u0648\u0637\u064A\u0646 \u0645\u062F\u0629 \u0643\u0644 \u0634\u0648\u0637 45 \u062F\u0642\u064A\u0642\u0629.",
+    isReligious: false
+  },
+  {
+    externalId: "MC-PZL-01",
+    roundType: "multiple_choice",
+    category: "\u0627\u0644\u0623\u0644\u063A\u0627\u0632 \u0648\u0627\u0644\u062A\u0641\u0643\u064A\u0631",
+    ageGroup: "family",
+    difficulty: "medium",
+    difficultyLevel: 3,
+    prompt: "\u0645\u0627 \u0627\u0644\u0634\u064A\u0621 \u0627\u0644\u0630\u064A \u064A\u0632\u064A\u062F \u0643\u0644\u0645\u0627 \u0623\u062E\u0630\u062A \u0645\u0646\u0647 \u0648\u064A\u0646\u0642\u0635 \u0643\u0644\u0645\u0627 \u0623\u0636\u0641\u062A \u0625\u0644\u064A\u0647\u061F",
+    options: ["\u0627\u0644\u062D\u0641\u0631\u0629", "\u0627\u0644\u0633\u0627\u0639\u0629", "\u0627\u0644\u0646\u0647\u0631", "\u0627\u0644\u0645\u064A\u0632\u0627\u0646"],
+    acceptableAnswers: ["\u0627\u0644\u062D\u0641\u0631\u0629"],
+    correctIndex: 0,
+    explanation: "\u0643\u0644\u0645\u0627 \u062D\u0641\u0631\u062A \u0648\u0623\u062E\u0630\u062A \u0645\u0646 \u0627\u0644\u062A\u0631\u0627\u0628 \u0627\u062A\u0633\u0639\u062A \u0627\u0644\u062D\u0641\u0631\u0629 \u0648\u0632\u0627\u062F \u062D\u062C\u0645\u0647\u0627.",
+    isReligious: false
+  },
+  {
+    externalId: "TF-BR-01",
+    roundType: "true_false",
+    category: "\u0628\u0631\u0627\u0639\u0645 \u0627\u0644\u0645\u0633\u062C\u062F",
+    ageGroup: "kids_7_10",
+    difficulty: "easy",
+    difficultyLevel: 1,
+    prompt: "\u0627\u0644\u0635\u062F\u0642 \u0648\u0627\u0644\u0623\u0645\u0627\u0646\u0629 \u0645\u0646 \u0623\u0639\u0638\u0645 \u0623\u062E\u0644\u0627\u0642 \u0627\u0644\u0645\u0633\u0644\u0645 \u0627\u0644\u062A\u064A \u064A\u062D\u0628\u0647\u0627 \u0627\u0644\u0644\u0647 \u0648\u0631\u0633\u0648\u0644\u0647 \uFDFA.",
+    options: ["\u0635\u062D", "\u062E\u0637\u0623"],
+    acceptableAnswers: ["\u0635\u062D"],
+    correctIndex: 0,
+    explanation: "\u0639\u064F\u0631\u0641 \u0627\u0644\u0646\u0628\u064A \uFDFA \u0628\u0627\u0644\u0635\u0627\u062F\u0642 \u0627\u0644\u0623\u0645\u064A\u0646\u060C \u0648\u0623\u0645\u0631 \u0627\u0644\u0645\u0633\u0644\u0645 \u0628\u0627\u0644\u0635\u062F\u0642 \u062F\u0627\u0626\u0645\u0627\u064B.",
+    isReligious: true
   }
 ];
 function seedDatabase(db2) {
@@ -5240,10 +6130,13 @@ function seedDatabase(db2) {
       "prof-admin-1"
     );
   }
-  const existingQCount = db2.prepare("SELECT COUNT(*) as c FROM questions").get().c;
-  if (existingQCount === 0) {
+  const existingExternalIds = new Set(
+    db2.prepare(`SELECT external_id FROM questions WHERE bank_id = 'bank-general-mosque' AND external_id IS NOT NULL`).all().map((r) => r.external_id)
+  );
+  const missingSeeds = SEED_QUESTIONS.filter((q) => !existingExternalIds.has(q.externalId));
+  if (missingSeeds.length > 0) {
     const insertQ = db2.prepare(`
-      INSERT INTO questions (
+      INSERT OR IGNORE INTO questions (
         id, bank_id, external_id, round_type, category, age_group, difficulty,
         difficulty_level, unsuitable_for_timed,
         prompt, options_json, acceptable_answers_json, correct_index, explanation,
@@ -5252,7 +6145,7 @@ function seedDatabase(db2) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const tx = db2.transaction(() => {
-      for (const q of SEED_QUESTIONS) {
+      for (const q of missingSeeds) {
         const hash = buildQuestionHash(q.prompt, q.acceptableAnswers);
         const normAge = normalizeAgeGroup(q.ageGroup);
         const diffLevel = q.difficultyLevel ?? difficultyToLevel(q.difficulty);
@@ -5298,7 +6191,7 @@ async function startServer() {
   if (!isProd) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
+      server: { middlewareMode: true, hmr: false, allowedHosts: true },
       appType: "spa"
     });
     app.use(vite.middlewares);

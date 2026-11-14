@@ -4,7 +4,7 @@ import { determineWinner, ROUND_RULES } from '../shared/gameRules';
 import type { GameSessionView } from '../shared/types';
 import { apiFetch, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
-import { ChallengeLogoEmblem } from './BrandEmblem';
+import { ChallengeLogoEmblem, SessionQrBadge } from './BrandEmblem';
 
 interface AudienceProjectorProps {
   code: string;
@@ -72,11 +72,11 @@ export function AudienceProjector({ code, onExit }: AudienceProjectorProps) {
           <button
             type="button"
             onClick={onExit}
-            aria-label="خروج من شاشة العرض"
+            aria-label="عودة خطوة"
             className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold inline-flex items-center gap-1"
           >
             <ArrowRight className="w-3.5 h-3.5" />
-            <span>خروج</span>
+            <span>عودة خطوة</span>
           </button>
         </div>
       </header>
@@ -169,12 +169,32 @@ export function AudienceProjector({ code, onExit }: AudienceProjectorProps) {
 
         {/* Phase-specific Display */}
         {session.phase === 'vs' ? (
-          <div className="rounded-3xl bg-[#101E52] border border-violet-400/40 p-12 text-center space-y-6">
-            <div className="text-xl font-bold text-sky-300">استعدوا لانطلاق المواجهة</div>
-            <div className="flex items-center justify-center gap-10 text-4xl sm:text-5xl font-black text-white">
+          <div className="rounded-3xl bg-[#101E52] border border-violet-400/40 p-8 sm:p-10 text-center space-y-6">
+            <div className="text-xl font-bold text-sky-300">استعدوا لانطلاق المواجهة — رمز الجلسة: <span className="font-mono text-amber-300">{session.code}</span></div>
+            <div className="flex items-center justify-center gap-8 sm:gap-10 text-3xl sm:text-5xl font-black text-white">
               <span className="animate-vs-right">{session.teams[0]?.name}</span>
-              <span className="w-20 h-20 rounded-full bg-violet-600 flex items-center justify-center text-2xl">VS</span>
+              <span className="w-20 h-20 rounded-full bg-violet-600 flex items-center justify-center text-2xl shrink-0">VS</span>
               {session.teams[1] && <span className="animate-vs-left">{session.teams[1].name}</span>}
+            </div>
+            <div className="pt-4 border-t border-white/10 flex flex-wrap items-center justify-center gap-6">
+              <div className="flex flex-col items-center gap-2">
+                <SessionQrBadge
+                  code={session.code}
+                  url={`${window.location.origin}/?mode=host&code=${session.code}`}
+                  size="sm"
+                />
+                <span className="text-xs font-bold text-emerald-300">تحكم الأستاذ (جوال)</span>
+              </div>
+              {session.teams.map((t) => (
+                <div key={t.index} className="flex flex-col items-center gap-2">
+                  <SessionQrBadge
+                    code={session.code}
+                    url={`${window.location.origin}/?mode=buzzer&code=${session.code}&team=${t.index}`}
+                    size="sm"
+                  />
+                  <span className="text-xs font-bold text-sky-200">جرس: {t.name}</span>
+                </div>
+              ))}
             </div>
           </div>
         ) : session.phase === 'finished' ? (
@@ -225,6 +245,48 @@ export function AudienceProjector({ code, onExit }: AudienceProjectorProps) {
                         <span>{clue}</span>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {q.roundType === 'bid_challenge' && session.bidState && (
+                  <div className="max-w-4xl mx-auto rounded-2xl bg-[#09143A] border border-amber-400/40 p-6 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div className="text-right">
+                        <div className="text-sm font-bold text-amber-300">
+                          {session.bidState.phase === 'bidding' ? 'المزايدة الجارية' : 'التنفيذ المباشر (٣٠ ثانية)'}
+                        </div>
+                        <div className="text-2xl font-black text-white">
+                          المزايد: {session.teams[session.bidState.bidderTeamIndex]?.name}
+                        </div>
+                      </div>
+                      <div className="text-center px-6 py-3 rounded-2xl bg-[#101E52] border border-sky-400/40">
+                        <div className="text-xs text-slate-300">المطلوب / المُنجَز</div>
+                        <div className="text-3xl font-black text-sky-300 tabular-nums">
+                          {session.bidState.phase === 'bidding'
+                            ? `${session.bidState.currentBid} إجابات`
+                            : `${session.bidState.acceptedAnswers.length} / ${session.bidState.currentBid}`}
+                        </div>
+                      </div>
+                    </div>
+
+                    {session.bidState.acceptedAnswers.length > 0 && (
+                      <div className="flex flex-wrap justify-center gap-2.5">
+                        {session.bidState.acceptedAnswers.map((ans, idx) => (
+                          <span
+                            key={idx}
+                            className="px-4 py-2 rounded-xl bg-emerald-500/20 border border-emerald-400/45 text-lg font-extrabold text-emerald-100"
+                          >
+                            {idx + 1}. {ans}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {session.bidState.lastDuplicateWarning && (
+                      <div className="text-sm font-bold text-amber-300">
+                        {session.bidState.lastDuplicateWarning}
+                      </div>
+                    )}
                   </div>
                 )}
 

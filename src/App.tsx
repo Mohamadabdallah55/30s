@@ -26,10 +26,12 @@ type AppScreen =
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('title');
+  const [historyStack, setHistoryStack] = useState<AppScreen[]>([]);
   const [user, setUser] = useState<ProfilePublic | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [activeSession, setActiveSession] = useState<GameSessionView | null>(null);
   const [sessionCode, setSessionCode] = useState<string | null>(null);
+  const [studioLessonId, setStudioLessonId] = useState<string | null>(null);
   const [buzzerTeamIndex, setBuzzerTeamIndex] = useState<number>(0);
 
   const [soundEnabled, setSoundEnabled] = useState(false); // Quiet mosque default
@@ -37,6 +39,51 @@ export default function App() {
   const [reducedMotion, setReducedMotion] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia?.('(prefers-reduced-motion: reduce)').matches : false
   );
+
+  const navigateTo = useCallback(
+    (next: AppScreen) => {
+      setScreen((prev) => {
+        if (prev === next) return prev;
+        setHistoryStack((stack) => [...stack.slice(-14), prev]);
+        try {
+          window.history.pushState({ appScreen: next }, '', window.location.href);
+        } catch {
+          // Ignore sandbox history restrictions
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const goBackOneStep = useCallback(() => {
+    setHistoryStack((stack) => {
+      const nextStack = [...stack];
+      while (nextStack.length > 0) {
+        const prev = nextStack.pop()!;
+        if (prev === 'arena' && !activeSession) continue;
+        if ((prev === 'host' || prev === 'projector' || prev === 'buzzer') && !sessionCode) continue;
+        setScreen(prev);
+        return nextStack;
+      }
+      setScreen('title');
+      return [];
+    });
+  }, [activeSession, sessionCode]);
+
+  const goHome = useCallback(() => {
+    setHistoryStack([]);
+    setScreen('title');
+  }, []);
+
+  // Sync browser/phone hardware Back button with step-by-step navigation
+  useEffect(() => {
+    const onPopState = () => {
+      goBackOneStep();
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [goBackOneStep]);
 
   // Sync sound engine state
   useEffect(() => {
@@ -104,7 +151,7 @@ export default function App() {
   const handleLogout = () => {
     setAuthToken(null);
     setUser(null);
-    setScreen('title');
+    goHome();
   };
 
   const handleJoinSession = async (code: string, mode: 'projector' | 'host' | 'buzzer' | 'arena', teamIdx = 0) => {
@@ -114,10 +161,10 @@ export default function App() {
         const res = await apiFetch<{ session: GameSessionView }>(`/api/sessions/${norm}?role=player`);
         setActiveSession(res.session);
         setSessionCode(norm);
-        setScreen('arena');
+        navigateTo('arena');
       } catch {
         setSessionCode(norm);
-        setScreen('projector');
+        navigateTo('projector');
       }
       return;
     }
@@ -125,22 +172,22 @@ export default function App() {
     if (mode === 'buzzer') {
       setBuzzerTeamIndex(teamIdx);
     }
-    setScreen(mode);
+    navigateTo(mode);
   };
 
   const handleSessionCreated = (session: GameSessionView, launchMode: 'arena' | 'host_and_projector') => {
     setActiveSession(session);
     setSessionCode(session.code);
     if (launchMode === 'host_and_projector') {
-      setScreen('host');
+      navigateTo('host');
     } else {
-      setScreen('arena');
+      navigateTo('arena');
     }
   };
 
   const handleOpenProjector = (code: string) => {
     setSessionCode(code);
-    setScreen('projector');
+    navigateTo('projector');
   };
 
   return (
@@ -153,11 +200,11 @@ export default function App() {
           reducedMotion={reducedMotion}
           onToggleSound={handleToggleSound}
           onToggleReducedMotion={() => setReducedMotion((p) => !p)}
-          onStartSetup={() => setScreen('setup')}
+          onStartSetup={() => navigateTo('setup')}
           onOpenAuth={() => setAuthOpen(true)}
-          onOpenProfile={() => setScreen('profile')}
-          onOpenLessonStudio={() => setScreen('lesson_studio')}
-          onOpenAdminBank={() => setScreen('admin_bank')}
+          onOpenProfile={() => navigateTo('profile')}
+          onOpenLessonStudio={() => navigateTo('lesson_studio')}
+          onOpenAdminBank={() => navigateTo('admin_bank')}
           onJoinSession={handleJoinSession}
         />
       )}
@@ -165,7 +212,7 @@ export default function App() {
       {screen === 'setup' && (
         <MatchSetup
           user={user}
-          onBack={() => setScreen('title')}
+          onBack={goBackOneStep}
           onSessionCreated={handleSessionCreated}
         />
       )}
@@ -175,11 +222,12 @@ export default function App() {
           initialSession={activeSession}
           soundEnabled={soundEnabled}
           onToggleSound={handleToggleSound}
-          onPlayAgain={() => setScreen('setup')}
-          onExit={() => setScreen('title')}
+          onPlayAgain={() => navigateTo('setup')}
+          onExit={goBackOneStep}
+          onGoHome={goHome}
           onOpenHostPanel={(code) => {
             setSessionCode(code);
-            setScreen('host');
+            navigateTo('host');
           }}
         />
       )}
@@ -187,32 +235,44 @@ export default function App() {
       {screen === 'host' && sessionCode && (
         <HostConsole
           code={sessionCode}
-          onBack={() => setScreen('title')}
+          onBack={goBackOneStep}
           onOpenProjector={handleOpenProjector}
         />
       )}
 
       {screen === 'projector' && sessionCode && (
-        <AudienceProjector code={sessionCode} onExit={() => setScreen('title')} />
+        <AudienceProjector code={sessionCode} onExit={goBackOneStep} />
       )}
 
       {screen === 'buzzer' && sessionCode && (
         <TeamBuzzer
           code={sessionCode}
           initialTeamIndex={buzzerTeamIndex}
-          onExit={() => setScreen('title')}
+          onExit={goBackOneStep}
         />
       )}
 
       {screen === 'lesson_studio' && (
         <LessonStudio
           user={user}
-          onBack={() => setScreen('title')}
+          initialLessonId={studioLessonId}
+          onSelectLessonId={setStudioLessonId}
+          onBack={goBackOneStep}
           onOpenAuth={() => setAuthOpen(true)}
           onLaunchSession={(session) => {
             setActiveSession(session);
             setSessionCode(session.code);
-            setScreen('arena');
+            navigateTo('arena');
+          }}
+          onOpenHostPanel={(session) => {
+            setActiveSession(session);
+            setSessionCode(session.code);
+            navigateTo('host');
+          }}
+          onOpenProjector={(session) => {
+            setActiveSession(session);
+            setSessionCode(session.code);
+            navigateTo('projector');
           }}
         />
       )}
@@ -220,7 +280,7 @@ export default function App() {
       {screen === 'admin_bank' && (
         <AdminBank
           user={user}
-          onBack={() => setScreen('title')}
+          onBack={goBackOneStep}
           onOpenAuth={() => setAuthOpen(true)}
         />
       )}
@@ -228,7 +288,7 @@ export default function App() {
       {screen === 'profile' && (
         <PlayerProfile
           user={user}
-          onBack={() => setScreen('title')}
+          onBack={goBackOneStep}
           onOpenAuth={() => setAuthOpen(true)}
           onLogout={handleLogout}
         />

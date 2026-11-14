@@ -12,9 +12,11 @@ import {
 } from '../shared/questionSchema';
 import type {
   AgeGroup,
+  AllowedAiModel,
   DiagnosticLogEntry,
   Difficulty,
   LessonBatchSummary,
+  LessonErrorCategory,
   LessonPipelineStage,
   PipelineStageLog,
   QuestionRecord,
@@ -43,11 +45,62 @@ export interface GeminiRawResponse {
   candidateTokens?: number;
 }
 
+export const ALLOWED_AI_MODELS: ReadonlyArray<{
+  id: AllowedAiModel;
+  labelAr: string;
+  noteAr: string;
+  isDefault?: boolean;
+}> = [
+  {
+    id: 'gemini-4-hydrogen',
+    labelAr: 'Gemini Flash القياسي (gemini-4-hydrogen)',
+    noteAr: 'النموذج المجاني الافتراضي (Free Tier) — متوازن لتحليل PDF العربي واستخراج الجداول والأسئلة الدقيقة',
+    isDefault: true,
+  },
+  {
+    id: 'gemini-3.1-flash-lite',
+    labelAr: 'Gemini Flash السريع الخفيف (gemini-3.1-flash-lite)',
+    noteAr: 'سريع جداً وزمن استجابة أقل ومناسب لتقليل استهلاك الحصة المجانية',
+  },
+];
+
+export const DEFAULT_AI_MODEL: AllowedAiModel = 'gemini-4-hydrogen';
+
+export function isAllowedAiModel(model: string): model is AllowedAiModel {
+  return model === 'gemini-4-hydrogen' || model === 'gemini-3.1-flash-lite';
+}
+
+export function getConfiguredAiModel(db: Database.Database): AllowedAiModel {
+  try {
+    const row = db
+      .prepare(`SELECT value FROM app_settings WHERE key = 'lesson_ai_model'`)
+      .get() as { value: string } | undefined;
+    if (row && isAllowedAiModel(row.value)) {
+      return row.value;
+    }
+  } catch {
+    // Ignore if app_settings is not yet initialized in edge callers
+  }
+  return DEFAULT_AI_MODEL;
+}
+
+export function setConfiguredAiModel(db: Database.Database, model: string): AllowedAiModel {
+  if (!isAllowedAiModel(model)) {
+    throw new Error('النموذج المختار غير مدعوم ضمن النماذج المجانية المعتمدة.');
+  }
+  db.prepare(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ('lesson_ai_model', ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+  ).run(model);
+  return model;
+}
+
 export interface GeminiRunner {
   generateStructuredJson(params: {
     pdfBase64?: string;
     pageSliceText?: string;
-    model?: 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
+    model?: AllowedAiModel;
     systemInstruction: string;
     prompt: string;
     responseSchema: Record<string, unknown>;
@@ -89,6 +142,33 @@ export const LessonAnalysisSchema = z.object({
   coverageSummary: z.string().default(''),
 });
 
+const COGNITIVE_SKILL_VALUES = [
+  'analysis',
+  'inference',
+  'chronology',
+  'comparison',
+  'fact_vs_hypothetical',
+  'recall',
+] as const;
+
+type CognitiveSkill = (typeof COGNITIVE_SKILL_VALUES)[number];
+
+function normalizeCognitiveSkill(raw?: string): CognitiveSkill {
+  const val = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if ((COGNITIVE_SKILL_VALUES as readonly string[]).includes(val)) {
+    return val as CognitiveSkill;
+  }
+  if (/استنتاج|استدلال|infer/.test(val)) return 'inference';
+  if (/زمن|تسلسل|تاريخ|chron/.test(val)) return 'chronology';
+  if (/مقارن|فارق|compar/.test(val)) return 'comparison';
+  if (/حقيق|افتراض|hypo/.test(val)) return 'fact_vs_hypothetical';
+  if (/تذكر|حفظ|مباشر|recall/.test(val)) return 'recall';
+  return 'analysis';
+}
+
 export const GeneratedQuestionSchema = z.object({
   roundType: z.string().min(1),
   prompt: z.string().min(6),
@@ -101,12 +181,15 @@ export const GeneratedQuestionSchema = z.object({
   memoryItems: z.array(z.string()).default([]),
   oddReason: z.string().default(''),
   cognitiveSkill: z
-    .enum(['analysis', 'inference', 'chronology', 'comparison', 'fact_vs_hypothetical', 'recall'])
+    .string()
     .optional()
-    .default('analysis'),
-  sourcePage: z.number().int().min(1),
+    .transform((v) => normalizeCognitiveSkill(v)),
+  sourcePage: z.coerce.number().int().min(1).catch(1),
   sourceExcerpt: z.string().min(4),
-  confidenceScore: z.number().min(0).max(1).default(0.85),
+  confidenceScore: z
+    .number()
+    .optional()
+    .transform((v) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.85)),
   isReligious: z.boolean().default(false),
 });
 
@@ -186,6 +269,33 @@ export class TransientNetworkError extends Error {
   }
 }
 
+export class QuotaExhaustedError extends Error {
+  retryDelaySec?: number;
+  isDailyLimit: boolean;
+  constructor(message: string, opts: { retryDelaySec?: number; isDailyLimit?: boolean } = {}) {
+    super(message);
+    this.name = 'QuotaExhaustedError';
+    this.retryDelaySec = opts.retryDelaySec;
+    this.isDailyLimit = Boolean(opts.isDailyLimit);
+  }
+}
+
+export class RateLimitError extends Error {
+  retryDelaySec?: number;
+  constructor(message: string, retryDelaySec?: number) {
+    super(message);
+    this.name = 'RateLimitError';
+    this.retryDelaySec = retryDelaySec;
+  }
+}
+
+export class DatabasePersistenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DatabasePersistenceError';
+  }
+}
+
 // ================= CONSTANTS, METRICS & SSE BUS =================
 
 const MAX_PDF_BYTES = 15 * 1024 * 1024;
@@ -193,7 +303,7 @@ const MAX_PDF_PAGES_HINT = 60;
 const BATCH_TIMEOUT_MS = 45_000;
 const ANALYSIS_TIMEOUT_MS = 60_000;
 const MIN_BATCH_SIZE = 2;
-const DEFAULT_POOL_CONCURRENCY = 3;
+const DEFAULT_POOL_CONCURRENCY = 2;
 
 const activeLessonRuns = new Set<string>();
 const lessonStreamListeners = new Map<string, Set<(ev: LessonStreamEvent) => void>>();
@@ -242,6 +352,15 @@ function emitLessonEvent(
 
 // ================= DEFAULT GEMINI RUNNER =================
 
+function parseRetryDelaySec(msg: string): number | undefined {
+  const m =
+    msg.match(/retryDelay["']?\s*:\s*["']?(\d+(?:\.\d+)?)s/i) ??
+    msg.match(/retry in\s+(\d+(?:\.\d+)?)s/i);
+  if (!m) return undefined;
+  const parsed = Number(m[1]);
+  return Number.isFinite(parsed) ? Math.ceil(parsed) : undefined;
+}
+
 export function createDefaultGeminiRunner(): GeminiRunner {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
@@ -260,7 +379,7 @@ export function createDefaultGeminiRunner(): GeminiRunner {
     async generateStructuredJson({
       pdfBase64,
       pageSliceText,
-      model = 'gemini-4-hydrogen',
+      model = DEFAULT_AI_MODEL,
       systemInstruction,
       prompt,
       responseSchema,
@@ -268,6 +387,7 @@ export function createDefaultGeminiRunner(): GeminiRunner {
       maxOutputTokens,
       timeoutMs,
     }) {
+      const safeModel: AllowedAiModel = isAllowedAiModel(model) ? model : DEFAULT_AI_MODEL;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -281,7 +401,7 @@ export function createDefaultGeminiRunner(): GeminiRunner {
         parts.push({ text: prompt });
 
         const resp = await ai.models.generateContent({
-          model,
+          model: safeModel,
           contents: { parts },
           config: {
             systemInstruction,
@@ -303,7 +423,23 @@ export function createDefaultGeminiRunner(): GeminiRunner {
           throw new TransientNetworkError('انتهت مهلة الاتصال بخدمة الذكاء الاصطناعي قبل اكتمال الرد.');
         }
         const msg = err instanceof Error ? err.message : String(err);
-        if (/429|503|502|504|ECONNRESET|ETIMEDOUT|fetch failed|network|socket|timeout/i.test(msg)) {
+        if (/429|RESOURCE_EXHAUSTED|quota|rate limit/i.test(msg)) {
+          const retryDelaySec = parseRetryDelaySec(msg);
+          const isDaily =
+            /GenerateRequestsPerDay|PerDay|daily/i.test(msg) ||
+            (typeof retryDelaySec === 'number' && retryDelaySec > 120);
+          if (isDaily) {
+            throw new QuotaExhaustedError(
+              'نفدت الحصة اليومية المجانية لخدمة الذكاء الاصطناعي (Free Tier). تم إيقاف الطلبات وحفظ كل التقدم.',
+              { retryDelaySec, isDailyLimit: true }
+            );
+          }
+          throw new RateLimitError(
+            'تم بلوغ حد الطلبات اللحظي للحصة المجانية (Free Tier).',
+            retryDelaySec
+          );
+        }
+        if (/503|502|504|ECONNRESET|ETIMEDOUT|fetch failed|network|socket|timeout/i.test(msg)) {
           throw new TransientNetworkError(`خطأ مؤقت في الشبكة أو الضغط على الخادم: ${msg}`);
         }
         throw err;
@@ -594,30 +730,102 @@ function isCancelRequested(db: Database.Database, batchId: string): boolean {
   return Number(row?.cancel_requested || 0) === 1;
 }
 
-function toUserFriendlyError(err: unknown): string {
+export function classifyLessonError(err: unknown): {
+  category: LessonErrorCategory;
+  messageAr: string;
+} {
+  if (err instanceof QuotaExhaustedError) {
+    return {
+      category: 'quota_exhausted',
+      messageAr:
+        'نفدت الحصة اليومية المجانية لخدمة الذكاء الاصطناعي (Free Tier). تم إيقاف الطلبات فوراً وحفظ كل الأسئلة والتقدم؛ يمكنك الاستكمال لاحقاً عند تجدد الحصة أو التبديل للنموذج الأخف.',
+    };
+  }
+  if (err instanceof RateLimitError) {
+    return {
+      category: 'rate_limit',
+      messageAr:
+        'تم بلوغ حد الطلبات اللحظي ضمن الحصة المجانية (Free Tier). تم حفظ تقدمك السابق؛ انتظر لحظات ثم اضغط «استكمال التوليد».',
+    };
+  }
+  if (err instanceof DatabasePersistenceError) {
+    return {
+      category: 'database_failure',
+      messageAr: err.message,
+    };
+  }
   if (err instanceof BatchOutputLimitError) {
-    return 'بلغت هذه الدفعة الحد الأقصى لحجم الاستجابة قبل اكتمالها. تم حفظ كل الأسئلة السابقة ويمكنك استكمال التوليد بحجم دفعة أصغر.';
+    return {
+      category: 'invalid_json',
+      messageAr:
+        'بلغت هذه الدفعة الحد الأقصى لحجم الاستجابة قبل اكتمالها. تم حفظ كل الأسئلة السابقة ويمكنك استكمال التوليد بحجم دفعة أصغر.',
+    };
   }
   if (err instanceof InvalidJsonResponseError) {
-    return 'انقطعت استجابة الذكاء الاصطناعي أو وصلت غير مكتملة لهذه الدفعة. لم يتم حفظ أي بيانات ناقصة ولم تُفقد الأسئلة السابقة.';
+    return {
+      category: 'invalid_json',
+      messageAr:
+        'انقطعت استجابة الذكاء الاصطناعي أو وصلت غير مكتملة لهذه الدفعة. لم يتم حفظ أي بيانات ناقصة ولم تُفقد الأسئلة السابقة.',
+    };
   }
   if (err instanceof SchemaValidationError) {
-    return err.message;
+    return {
+      category: 'validation_failure',
+      messageAr: err.message,
+    };
   }
   if (err instanceof TransientNetworkError) {
-    return 'انقطع الاتصال مؤقتاً بخدمة الذكاء الاصطناعي أو انتهت المهلة. تم حفظ تقدمك السابق ويمكنك استكمال التوليد فوراً.';
+    const isTimeout = /انتهت مهلة|timeout|ETIMEDOUT|abort/i.test(err.message);
+    return {
+      category: isTimeout ? 'timeout' : 'network_interruption',
+      messageAr: isTimeout
+        ? 'انتهت مهلة استجابة خدمة الذكاء الاصطناعي لهذه الدفعة. تم حفظ تقدمك السابق ويمكنك الاستكمال.'
+        : 'انقطع الاتصال مؤقتاً بخدمة الذكاء الاصطناعي. تم حفظ تقدمك السابق ويمكنك استكمال التوليد فوراً.',
+    };
   }
   const msg = err instanceof Error ? err.message : String(err);
   if (/GEMINI_API_KEY|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
-    return 'تعذر التحقق من صلاحية مفتاح الذكاء الاصطناعي على الخادم.';
+    return {
+      category: 'quota_exhausted',
+      messageAr: 'تعذر التحقق من صلاحية مفتاح الذكاء الاصطناعي على الخادم.',
+    };
   }
   if (/RESOURCE_EXHAUSTED|429/i.test(msg)) {
-    return 'تم بلوغ حد الطلبات المؤقت لخدمة الذكاء الاصطناعي. انتظر لحظات ثم اضغط «استكمال التوليد».';
+    const isDaily = /GenerateRequestsPerDay|PerDay|daily/i.test(msg);
+    return {
+      category: isDaily ? 'quota_exhausted' : 'rate_limit',
+      messageAr: isDaily
+        ? 'نفدت الحصة اليومية المجانية للذكاء الاصطناعي (Free Tier). تم إيقاف الطلبات مع حفظ التقدم.'
+        : 'تم بلوغ حد الطلبات اللحظي لخدمة الذكاء الاصطناعي. انتظر لحظات ثم اضغط «استكمال التوليد».',
+    };
   }
   if (/Unterminated string|Unexpected token|JSON/i.test(msg)) {
-    return 'توقفت استجابة التوليد قبل اكتمال صيغتها لهذه الدفعة. تم حفظ الأسئلة السابقة ويمكنك إعادة محاولة الدفعة.';
+    return {
+      category: 'invalid_json',
+      messageAr:
+        'توقفت استجابة التوليد قبل اكتمال صيغتها لهذه الدفعة. تم حفظ الأسئلة السابقة ويمكنك إعادة محاولة الدفعة.',
+    };
   }
-  return msg || 'تعذر إكمال هذه الدفعة، تم حفظ الأسئلة الصالحة السابقة.';
+  if (/PDF|ممسوح|استخلاص نص|صفحات فارغة/i.test(msg)) {
+    return {
+      category: 'file_parsing_error',
+      messageAr: msg,
+    };
+  }
+  if (/SQLITE_/i.test(msg)) {
+    return {
+      category: 'database_failure',
+      messageAr: 'تعذر حفظ الدفعة في قاعدة البيانات المحلية؛ يرجى التحقق من السجل الفني.',
+    };
+  }
+  return {
+    category: 'network_interruption',
+    messageAr: msg || 'تعذر إكمال هذه الدفعة، تم حفظ الأسئلة الصالحة السابقة.',
+  };
+}
+
+function toUserFriendlyError(err: unknown): string {
+  return classifyLessonError(err).messageAr;
 }
 
 // ================= CORE PIPELINE EXECUTION =================
@@ -626,7 +834,7 @@ async function runSingleGeminiCallWithRetry<T>(params: {
   runner: GeminiRunner;
   pdfBase64?: string;
   pageSliceText?: string;
-  model?: 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
+  model?: AllowedAiModel;
   systemInstruction: string;
   prompt: string;
   responseSchema: Record<string, unknown>;
@@ -641,6 +849,7 @@ async function runSingleGeminiCallWithRetry<T>(params: {
   batchSize?: number;
 }): Promise<T> {
   let lastNetworkErr: unknown;
+  let rateLimitRetried = false;
   for (let netAttempt = 0; netAttempt <= 2; netAttempt++) {
     const t0 = Date.now();
     try {
@@ -668,6 +877,30 @@ async function runSingleGeminiCallWithRetry<T>(params: {
       });
       return parsed.data;
     } catch (err) {
+      if (err instanceof QuotaExhaustedError) {
+        appendDiagnostic(params.db, params.batchId, params.diagnostics, {
+          batchIndex: params.batchIndex,
+          batchSize: params.batchSize,
+          elapsedMs: Date.now() - t0,
+          message: `توقف فوري بسبب نفاد الحصة اليومية المجانية${err.retryDelaySec ? ` (retryDelay=${err.retryDelaySec}s)` : ''}.`,
+        });
+        throw err;
+      }
+      if (err instanceof RateLimitError) {
+        appendDiagnostic(params.db, params.batchId, params.diagnostics, {
+          batchIndex: params.batchIndex,
+          batchSize: params.batchSize,
+          elapsedMs: Date.now() - t0,
+          message: `حد الطلبات اللحظي 429${err.retryDelaySec ? ` (retryDelay=${err.retryDelaySec}s)` : ''}.`,
+        });
+        if (!rateLimitRetried && typeof err.retryDelaySec === 'number' && err.retryDelaySec <= 25) {
+          rateLimitRetried = true;
+          const waitMs = Math.min(15_000, Math.max(1000, err.retryDelaySec * 1000));
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        throw err;
+      }
       if (err instanceof BatchOutputLimitError) {
         appendDiagnostic(params.db, params.batchId, params.diagnostics, {
           batchIndex: params.batchIndex,
@@ -775,6 +1008,31 @@ const ANALYSIS_RESPONSE_SCHEMA = {
   ],
 };
 
+const COMPACT_ANALYSIS_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    readabilityOk: { type: Type.BOOLEAN },
+    readabilityNote: { type: Type.STRING },
+    actualPageCount: { type: Type.INTEGER },
+    isReligiousContent: { type: Type.BOOLEAN },
+    topics: ANALYSIS_RESPONSE_SCHEMA.properties.topics,
+    pageSummaries: ANALYSIS_RESPONSE_SCHEMA.properties.pageSummaries,
+    objectives: { type: Type.ARRAY, items: { type: Type.STRING } },
+    estimatedMaxDistinctQuestions: { type: Type.INTEGER },
+    coverageSummary: { type: Type.STRING },
+  },
+  required: [
+    'readabilityOk',
+    'readabilityNote',
+    'actualPageCount',
+    'isReligiousContent',
+    'topics',
+    'objectives',
+    'estimatedMaxDistinctQuestions',
+    'coverageSummary',
+  ],
+};
+
 const BATCH_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -783,7 +1041,23 @@ const BATCH_RESPONSE_SCHEMA = {
       items: {
         type: Type.OBJECT,
         properties: {
-          roundType: { type: Type.STRING },
+          roundType: {
+            type: Type.STRING,
+            enum: [
+              'rapid_fire',
+              'list_multiple',
+              'true_false',
+              'multiple_choice',
+              'fill_blank',
+              'who_am_i',
+              'odd_one_out',
+              'order_items',
+              'memory',
+              'buzzer',
+              'golden',
+              'bid_challenge',
+            ],
+          },
           prompt: { type: Type.STRING },
           options: { type: Type.ARRAY, items: { type: Type.STRING } },
           acceptableAnswers: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -793,7 +1067,10 @@ const BATCH_RESPONSE_SCHEMA = {
           orderCriteria: { type: Type.STRING },
           memoryItems: { type: Type.ARRAY, items: { type: Type.STRING } },
           oddReason: { type: Type.STRING },
-          cognitiveSkill: { type: Type.STRING },
+          cognitiveSkill: {
+            type: Type.STRING,
+            enum: ['analysis', 'inference', 'chronology', 'comparison', 'fact_vs_hypothetical', 'recall'],
+          },
           sourcePage: { type: Type.INTEGER },
           sourceExcerpt: { type: Type.STRING },
           confidenceScore: { type: Type.NUMBER },
@@ -803,6 +1080,7 @@ const BATCH_RESPONSE_SCHEMA = {
           'roundType',
           'prompt',
           'acceptableAnswers',
+          'cognitiveSkill',
           'sourcePage',
           'sourceExcerpt',
           'confidenceScore',
@@ -886,17 +1164,19 @@ export function createLessonBatchJob(
       input.createdBy
     );
 
+    const modelUsed = getConfiguredAiModel(db);
     db.prepare(
       `INSERT INTO lesson_question_batches (
          id, lesson_id, bank_id, pipeline_stage, stage_logs_json, requested_count,
-         current_batch_size, status_message_ar
-       ) VALUES (?, ?, ?, 'uploaded', '[]', ?, ?, ?)`
+         current_batch_size, model_used, started_at, last_batch_status, status_message_ar
+       ) VALUES (?, ?, ?, 'uploaded', '[]', ?, ?, ?, datetime('now'), 'idle', ?)`
     ).run(
       batchId,
       lessonId,
       bankId,
       Math.min(100, Math.max(1, input.requestedCount)),
       initialBatchSize,
+      modelUsed,
       'جارٍ تجهيز ملف الدرس وفحص الصفحات...'
     );
   })();
@@ -948,9 +1228,9 @@ export async function processLessonBatches(params: {
       `SELECT l.id as lesson_id, l.title, l.subject, l.age_group, l.difficulty,
               d.id as doc_id, d.filename, d.page_count, d.sha256, d.storage_path, d.extracted_content_json,
               b.id as batch_id, b.bank_id, b.stage_logs_json, b.requested_count,
-              b.generated_count, b.verified_count, b.rejected_count,
-              b.plan_json, b.completed_batches, b.total_batches, b.current_batch_size,
-              b.failed_batch_index, b.diagnostic_logs_json
+              b.received_count, b.accepted_count, b.generated_count, b.verified_count, b.rejected_count,
+              b.plan_json, b.completed_batches, b.failed_batches, b.total_batches, b.current_batch_size,
+              b.failed_batch_index, b.model_used, b.diagnostic_logs_json
        FROM lessons l
        JOIN lesson_documents d ON d.lesson_id = l.id
        JOIN lesson_question_batches b ON b.lesson_id = l.id
@@ -975,14 +1255,19 @@ export async function processLessonBatches(params: {
   const docSha256 = String(row.sha256 || '');
   const logs = JSON.parse(String(row.stage_logs_json || '[]')) as PipelineStageLog[];
   const diagnostics = JSON.parse(String(row.diagnostic_logs_json || '[]')) as DiagnosticLogEntry[];
+  const activeModel = getConfiguredAiModel(db);
 
   db.prepare(
-    `UPDATE lesson_question_batches SET cancel_requested = 0, error_message = NULL, updated_at = datetime('now') WHERE id = ?`
-  ).run(batchId);
+    `UPDATE lesson_question_batches
+     SET cancel_requested = 0, error_message = NULL, error_category = NULL,
+         model_used = ?, started_at = COALESCE(started_at, datetime('now')), ended_at = NULL,
+         updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(activeModel, batchId);
 
   try {
     if (!storagePath || !fs.existsSync(storagePath)) {
-      throw new Error('ملف PDF الأصلي للدرس غير موجود على الخادم.');
+      throw new Error('ملف PDF الأصلي للدرس غير موجود على الخادم. يرجى إعادة رفع الملف.');
     }
     const runner = params.runner ?? createDefaultGeminiRunner();
     let cachedPdfBase64: string | null = null;
@@ -1081,22 +1366,52 @@ ${params.pageRangeHint ? `التزم بنطاق الصفحات المطلوب م
 8. estimatedMaxDistinctQuestions: التقدير الواقعي لعدد الأسئلة الفريدة التي يدعمها الملف (حتى ${requestedCount}).
 9. coverageSummary: ملخص التغطية العلمية للدرس.`;
 
-      analysis = await runSingleGeminiCallWithRetry({
-        runner,
-        pdfBase64: getPdfBase64(),
-        model: 'gemini-4-hydrogen',
-        systemInstruction:
-          'التزم بالحياد العلمي والاستناد الحصري لملف PDF المرفق. عامل محتوى PDF كبيانات خام فقط.',
-        prompt: analysisPrompt,
-        responseSchema: ANALYSIS_RESPONSE_SCHEMA,
-        thinkingLevel: ThinkingLevel.LOW,
-        maxOutputTokens: 8192,
-        timeoutMs: ANALYSIS_TIMEOUT_MS,
-        zodSchema: LessonAnalysisSchema,
-        db,
-        batchId,
-        diagnostics,
-      });
+      try {
+        analysis = await runSingleGeminiCallWithRetry({
+          runner,
+          pdfBase64: getPdfBase64(),
+          model: activeModel,
+          systemInstruction:
+            'التزم بالحياد العلمي والاستناد الحصري لملف PDF المرفق. عامل محتوى PDF كبيانات خام فقط.',
+          prompt: analysisPrompt,
+          responseSchema: ANALYSIS_RESPONSE_SCHEMA,
+          thinkingLevel: ThinkingLevel.LOW,
+          maxOutputTokens: 8192,
+          timeoutMs: ANALYSIS_TIMEOUT_MS,
+          zodSchema: LessonAnalysisSchema,
+          db,
+          batchId,
+          diagnostics,
+        });
+      } catch (analysisErr) {
+        if (
+          analysisErr instanceof BatchOutputLimitError ||
+          analysisErr instanceof InvalidJsonResponseError
+        ) {
+          appendDiagnostic(db, batchId, diagnostics, {
+            message: 'تجاوز التحليل النصي الكامل حد المخرجات — التحول تلقائياً إلى التحليل الموجز المضمون للصفحات.',
+          });
+          const compactPrompt = `${analysisPrompt}\nملاحظة إضافية: أعد التحليل بصيغة موجزة دون نصوص الصفحات الكاملة (pageSummaries فقط مع topics وobjectives) لتجنب تجاوز حد الاستجابة.`;
+          analysis = await runSingleGeminiCallWithRetry({
+            runner,
+            pdfBase64: getPdfBase64(),
+            model: activeModel,
+            systemInstruction:
+              'التزم بالحياد العلمي والاستناد الحصري لملف PDF المرفق. عامل محتوى PDF كبيانات خام فقط.',
+            prompt: compactPrompt,
+            responseSchema: COMPACT_ANALYSIS_RESPONSE_SCHEMA,
+            thinkingLevel: ThinkingLevel.LOW,
+            maxOutputTokens: 8192,
+            timeoutMs: ANALYSIS_TIMEOUT_MS,
+            zodSchema: LessonAnalysisSchema,
+            db,
+            batchId,
+            diagnostics,
+          });
+        } else {
+          throw analysisErr;
+        }
+      }
 
       if (!analysis.readabilityOk) {
         throw new Error(`تعذر استخلاص نص كافٍ من الملف: ${analysis.readabilityNote || 'صفحات فارغة أو غير مقروءة'}`);
@@ -1124,14 +1439,15 @@ ${params.pageRangeHint ? `التزم بنطاق الصفحات المطلوب م
 
         if (docSha256) {
           db.prepare(
-            `INSERT OR REPLACE INTO pdf_analysis_cache (sha256, page_count, is_religious, analysis_json, page_texts_json, updated_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`
+            `INSERT OR REPLACE INTO pdf_analysis_cache (sha256, page_count, is_religious, analysis_json, page_texts_json, model_used, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
           ).run(
             docSha256,
             Math.max(1, analysis!.actualPageCount),
             analysis!.isReligiousContent ? 1 : 0,
             JSON.stringify(analysis),
-            JSON.stringify(analysis!.pageTexts ?? [])
+            JSON.stringify(analysis!.pageTexts ?? []),
+            activeModel
           );
         }
       })();
@@ -1203,9 +1519,12 @@ ${params.pageRangeHint ? `التزم بنطاق الصفحات المطلوب م
     const keptPrompts: string[] = existingRows.map((r) => r.prompt);
     const keptFingerprints: string[] = existingRows.map((r) => toCompactFactFingerprint(r.prompt, r.source_page));
 
+    let totalReceivedCount = Number(row.received_count || row.generated_count || 0);
+    let totalAcceptedCount = Number(row.accepted_count || keptPrompts.length || 0);
     let totalGeneratedCount = Number(row.generated_count || 0);
     let totalVerifiedCount = keptPrompts.length;
     let totalRejectedCount = Number(row.rejected_count || 0);
+    let failedBatchesCount = Number(row.failed_batches || 0);
     let currentBatchSize = Number(row.current_batch_size || getInitialBatchSize(difficulty, requestedCount));
     let consecutiveZeroGainBatches = 0;
     let materialExhaustedNote = '';
@@ -1366,7 +1685,7 @@ ${params.pageRangeHint ? `- نطاق الصفحات المقيد: ${params.pageR
             runner,
             pdfBase64: useTextSliceOnly ? undefined : getPdfBase64(),
             pageSliceText: useTextSliceOnly ? slice.sliceText : undefined,
-            model: 'gemini-4-hydrogen',
+            model: activeModel,
             systemInstruction:
               'أعد JSON مطابقاً للمخطط فقط. اجعل النصوص عربية دقيقة وموجزة وخالية من الحشو. لا تخترع معلومات من خارج النص.',
             prompt: batchPrompt,
@@ -1384,6 +1703,7 @@ ${params.pageRangeHint ? `- نطاق الصفحات المقيد: ${params.pageR
 
           const candidates = genBatch.questions;
           totalGeneratedCount += candidates.length;
+          totalReceivedCount += candidates.length;
 
           // Fast verification using gemini-3.1-flash-lite + page slice text!
           let verdictMap = new Map<number, { supported: boolean; correctedPage?: number | null; reason: string }>();
@@ -1442,67 +1762,74 @@ ${JSON.stringify(
           const newlyInsertedIds: string[] = [];
           const diffLevel = difficultyToLevel(difficulty);
 
-          db.transaction(() => {
-            for (let i = 0; i < candidates.length; i++) {
-              if (totalVerifiedCount >= requestedCount) break;
-              const cand = candidates[i];
-              const verdict = verdictMap.get(i);
-              const isSupported = verdict
-                ? verdict.supported
-                : Boolean(cand.sourceExcerpt.trim().length >= 4 && cand.sourcePage >= 1);
-              if (!isSupported || cand.sourceExcerpt.trim().length < 4) {
-                rejectedInAttempt++;
-                continue;
-              }
-              const coercedType = coerceRoundType(cand.roundType) ?? 'multiple_choice';
-              const hash = buildQuestionHash(cand.prompt, cand.acceptableAnswers);
-              if (seenHashes.has(hash)) {
-                continue;
-              }
-              if (keptPrompts.some((kp) => arabicTextSimilarity(kp, cand.prompt) >= 0.88)) {
-                continue;
-              }
+          try {
+            db.transaction(() => {
+              for (let i = 0; i < candidates.length; i++) {
+                if (totalVerifiedCount >= requestedCount) break;
+                const cand = candidates[i];
+                const verdict = verdictMap.get(i);
+                const isSupported = verdict
+                  ? verdict.supported
+                  : Boolean(cand.sourceExcerpt.trim().length >= 4 && cand.sourcePage >= 1);
+                if (!isSupported || cand.sourceExcerpt.trim().length < 4) {
+                  rejectedInAttempt++;
+                  continue;
+                }
+                const coercedType = coerceRoundType(cand.roundType) ?? 'multiple_choice';
+                const hash = buildQuestionHash(cand.prompt, cand.acceptableAnswers);
+                if (seenHashes.has(hash)) {
+                  continue;
+                }
+                if (keptPrompts.some((kp) => arabicTextSimilarity(kp, cand.prompt) >= 0.88)) {
+                  continue;
+                }
 
-              seenHashes.add(hash);
-              const trimmedPrompt = cand.prompt.trim();
-              keptPrompts.push(trimmedPrompt);
-              const pageNum = verdict?.correctedPage && verdict.correctedPage > 0 ? verdict.correctedPage : cand.sourcePage;
-              keptFingerprints.push(toCompactFactFingerprint(trimmedPrompt, pageNum));
-              totalVerifiedCount++;
-              savedInAttempt++;
+                seenHashes.add(hash);
+                const trimmedPrompt = cand.prompt.trim();
+                keptPrompts.push(trimmedPrompt);
+                const pageNum = verdict?.correctedPage && verdict.correctedPage > 0 ? verdict.correctedPage : cand.sourcePage;
+                keptFingerprints.push(toCompactFactFingerprint(trimmedPrompt, pageNum));
+                totalVerifiedCount++;
+                totalAcceptedCount++;
+                savedInAttempt++;
 
-              const isRel = Boolean(cand.isReligious || analysis!.isReligiousContent);
-              const lowConfidence = (cand.confidenceScore ?? 0.85) < 0.78;
-              const status = isRel || lowConfidence ? 'needs_review' : 'published';
-              const qId = `q-${crypto.randomUUID().slice(0, 8)}`;
-              newlyInsertedIds.push(qId);
+                const isRel = Boolean(cand.isReligious || analysis!.isReligiousContent);
+                const lowConfidence = (cand.confidenceScore ?? 0.85) < 0.78;
+                const status = isRel || lowConfidence ? 'needs_review' : 'published';
+                const qId = `q-${crypto.randomUUID().slice(0, 8)}`;
+                newlyInsertedIds.push(qId);
 
-              insertQ.run(
-                qId,
-                bankId,
-                coercedType,
-                subject,
-                ageGroup,
-                difficulty,
-                diffLevel,
-                trimmedPrompt,
-                JSON.stringify(cand.options ?? []),
-                JSON.stringify(cand.acceptableAnswers),
-                typeof cand.correctIndex === 'number' ? cand.correctIndex : null,
-                cand.explanation ?? '',
-                JSON.stringify(cand.clues ?? []),
-                cand.orderCriteria ?? '',
-                JSON.stringify(cand.memoryItems ?? []),
-                cand.oddReason ?? '',
-                isRel ? 1 : 0,
-                status,
-                pageNum,
-                cand.sourceExcerpt.trim(),
-                cand.confidenceScore ?? 0.85,
-                hash
-              );
-            }
-          })();
+                insertQ.run(
+                  qId,
+                  bankId,
+                  coercedType,
+                  subject,
+                  ageGroup,
+                  difficulty,
+                  diffLevel,
+                  trimmedPrompt,
+                  JSON.stringify(cand.options ?? []),
+                  JSON.stringify(cand.acceptableAnswers),
+                  typeof cand.correctIndex === 'number' ? cand.correctIndex : null,
+                  cand.explanation ?? '',
+                  JSON.stringify(cand.clues ?? []),
+                  cand.orderCriteria ?? '',
+                  JSON.stringify(cand.memoryItems ?? []),
+                  cand.oddReason ?? '',
+                  isRel ? 1 : 0,
+                  status,
+                  pageNum,
+                  cand.sourceExcerpt.trim(),
+                  cand.confidenceScore ?? 0.85,
+                  hash
+                );
+              }
+            })();
+          } catch (dbErr) {
+            throw new DatabasePersistenceError(
+              `تعذر حفظ الأسئلة المستلمة في قاعدة البيانات: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`
+            );
+          }
 
           totalRejectedCount += rejectedInAttempt;
           slot.savedCount += savedInAttempt;
@@ -1526,19 +1853,23 @@ ${JSON.stringify(
           const completedCount = plan.filter((p) => p.status === 'completed').length;
           db.prepare(
             `UPDATE lesson_question_batches
-             SET plan_json = ?, total_batches = ?, completed_batches = ?, current_batch_size = ?,
-                 generated_count = ?, verified_count = ?, rejected_count = ?, failed_batch_index = NULL,
+             SET plan_json = ?, total_batches = ?, completed_batches = ?, failed_batches = ?, current_batch_size = ?,
+                 received_count = ?, accepted_count = ?, generated_count = ?, verified_count = ?, rejected_count = ?,
+                 failed_batch_index = NULL, last_batch_status = 'completed',
                  status_message_ar = ?, updated_at = datetime('now')
              WHERE id = ?`
           ).run(
             JSON.stringify(plan),
             plan.length,
             completedCount,
+            failedBatchesCount,
             currentBatchSize,
+            totalReceivedCount,
+            totalAcceptedCount,
             totalGeneratedCount,
             totalVerifiedCount,
             totalRejectedCount,
-            `تم إنشاء ${totalVerifiedCount} من أصل ${requestedCount} سؤالًا`,
+            `تم استلام ${totalReceivedCount} وحفظ ${totalVerifiedCount} من أصل ${requestedCount} سؤالًا في قاعدة البيانات`,
             batchId
           );
 
@@ -1560,8 +1891,22 @@ ${JSON.stringify(
           break;
         } catch (err) {
           batchLastErr = err;
+          if (err instanceof QuotaExhaustedError) {
+            // Daily Free Tier quota exhausted: stop immediately, do NOT keep calling Gemini!
+            stopDispatching = true;
+            break;
+          }
+          if (err instanceof RateLimitError) {
+            poolConcurrency = 1;
+            stopDispatching = true;
+            break;
+          }
+          if (err instanceof DatabasePersistenceError) {
+            stopDispatching = true;
+            break;
+          }
           if (err instanceof TransientNetworkError) {
-            // Adaptive concurrency drop on transient network / rate-limit errors
+            // Adaptive concurrency drop on transient network / timeout errors
             poolConcurrency = Math.max(1, poolConcurrency - 1);
             break;
           }
@@ -1580,8 +1925,9 @@ ${JSON.stringify(
         }
       }
 
-      if (!batchSucceeded && !stopDispatching && !isCancelRequested(db, batchId)) {
+      if (!batchSucceeded && !isCancelRequested(db, batchId)) {
         slot.status = 'failed';
+        failedBatchesCount++;
         stopDispatching = true;
         if (!firstFatalErr) {
           firstFatalErr = { batchIndex: idx, err: batchLastErr };
@@ -1621,33 +1967,49 @@ ${JSON.stringify(
 
     if (isCancelRequested(db, batchId)) {
       appendStageLog(db, batchId, logs, 'cancelled', 'تم إلغاء المعالجة', 'warning', `تم حفظ ${totalVerifiedCount} سؤالًا صالحًا قبل الإيقاف.`);
-      setStatusMessage(db, batchId, `تم إلغاء المعالجة مع حفظ ${totalVerifiedCount} سؤالًا صالحًا`);
-      db.prepare(`UPDATE lesson_question_batches SET pipeline_stage = 'cancelled', plan_json = ? WHERE id = ?`).run(
-        JSON.stringify(plan),
-        batchId
-      );
+      const cancelMsg =
+        totalVerifiedCount === 0
+          ? `تم إلغاء المعالجة وحفظ حالة المهمة — لم يُحفظ أي سؤال بعد (0 من أصل ${requestedCount})`
+          : `تم إلغاء المعالجة مع حفظ ${totalVerifiedCount} من أصل ${requestedCount} سؤالًا في قاعدة البيانات`;
+      db.prepare(
+        `UPDATE lesson_question_batches
+         SET pipeline_stage = 'cancelled', plan_json = ?, received_count = ?, accepted_count = ?,
+             failed_batches = ?, last_batch_status = 'cancelled', ended_at = datetime('now'),
+             status_message_ar = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(JSON.stringify(plan), totalReceivedCount, totalAcceptedCount, failedBatchesCount, cancelMsg, batchId);
       emitLessonEvent(db, lessonId, 'paused');
       return getLessonBatchSummary(db, lessonId)!;
     }
 
     if (firstFatalErr) {
       const { batchIndex: failedIdx, err: rawErr } = firstFatalErr as { batchIndex: number; err: unknown };
-      const friendlyErr = toUserFriendlyError(rawErr);
+      const classified = classifyLessonError(rawErr);
       const completedCount = plan.filter((p) => p.status === 'completed').length;
+      const pauseStatusMsg =
+        totalVerifiedCount === 0
+          ? `توقف مؤقت عند الدفعة ${failedIdx + 1} (تم حفظ حالة المهمة) — لم يُحفظ أي سؤال بعد (0 من أصل ${requestedCount})`
+          : `توقف مؤقت عند الدفعة ${failedIdx + 1} — تم حفظ ${totalVerifiedCount} من أصل ${requestedCount} سؤالًا في قاعدة البيانات`;
       db.prepare(
         `UPDATE lesson_question_batches
          SET pipeline_stage = 'batch_paused', plan_json = ?, total_batches = ?, completed_batches = ?,
-             current_batch_size = ?, failed_batch_index = ?, error_message = ?,
+             failed_batches = ?, current_batch_size = ?, failed_batch_index = ?,
+             received_count = ?, accepted_count = ?, last_batch_status = 'paused',
+             error_category = ?, error_message = ?, ended_at = datetime('now'),
              status_message_ar = ?, updated_at = datetime('now')
          WHERE id = ?`
       ).run(
         JSON.stringify(plan),
         plan.length,
         completedCount,
+        failedBatchesCount,
         currentBatchSize,
         failedIdx,
-        friendlyErr,
-        `توقف مؤقت عند الدفعة ${failedIdx + 1} — تم حفظ ${totalVerifiedCount} من أصل ${requestedCount} سؤالًا`,
+        totalReceivedCount,
+        totalAcceptedCount,
+        classified.category,
+        classified.messageAr,
+        pauseStatusMsg,
         batchId
       );
       appendStageLog(
@@ -1657,10 +2019,10 @@ ${JSON.stringify(
         'batch_paused',
         'توقف مؤقت مع حفظ التقدم',
         'warning',
-        `${friendlyErr} (الأسئلة المحفوظة حتى الآن: ${totalVerifiedCount})`
+        `${classified.messageAr} (الأسئلة المحفوظة في قاعدة البيانات: ${totalVerifiedCount})`
       );
       lessonRunTelemetry.set(lessonId, { cacheHit, elapsedMs: Date.now() - runStartMs });
-      emitLessonEvent(db, lessonId, 'paused', { error: friendlyErr });
+      emitLessonEvent(db, lessonId, 'paused', { error: classified.messageAr });
       return getLessonBatchSummary(db, lessonId)!;
     }
 
@@ -1717,7 +2079,7 @@ ${JSON.stringify(
       'schema_validation',
       'فحص البنية القياسية عبر Zod',
       'completed',
-      `جميع الأسئلة مطابقة تماماً لمخطط محرك الـ11 جولة.`
+      `جميع الأسئلة مطابقة تماماً لمخطط محرك الـ12 جولة.`
     );
     appendStageLog(
       db,
@@ -1739,14 +2101,19 @@ ${JSON.stringify(
     db.prepare(
       `UPDATE lesson_question_batches
        SET pipeline_stage = ?, verified_count = ?, rejected_count = ?, generated_count = ?,
-           failed_batch_index = NULL, error_message = NULL, insufficient_content_note = ?,
-           status_message_ar = ?, updated_at = datetime('now')
+           received_count = ?, accepted_count = ?, failed_batches = ?,
+           failed_batch_index = NULL, last_batch_status = 'completed',
+           error_category = NULL, error_message = NULL, ended_at = datetime('now'),
+           insufficient_content_note = ?, status_message_ar = ?, updated_at = datetime('now')
        WHERE id = ?`
     ).run(
       finalStage,
       actualTotal,
       totalRejectedCount,
       totalGeneratedCount,
+      totalReceivedCount,
+      actualTotal,
+      failedBatchesCount,
       materialExhaustedNote,
       finalStatusText,
       batchId
@@ -1755,19 +2122,20 @@ ${JSON.stringify(
     emitLessonEvent(db, lessonId, 'done');
     return getLessonBatchSummary(db, lessonId)!;
   } catch (err) {
-    const friendly = toUserFriendlyError(err);
+    const classified = classifyLessonError(err);
     lessonRunTelemetry.set(lessonId, { cacheHit, elapsedMs: Date.now() - runStartMs });
     appendDiagnostic(db, batchId, diagnostics, {
       message: `فشل مرحلة المعالجة: ${err instanceof Error ? err.message : String(err)}`,
     });
-    appendStageLog(db, batchId, logs, 'failed', 'تعذر إكمال المعالجة', 'failed', friendly);
+    appendStageLog(db, batchId, logs, 'failed', 'تعذر إكمال المعالجة', 'failed', classified.messageAr);
     db.prepare(
       `UPDATE lesson_question_batches
-       SET pipeline_stage = 'failed', error_message = ?, status_message_ar = ?, updated_at = datetime('now')
+       SET pipeline_stage = 'failed', last_batch_status = 'failed', error_category = ?,
+           error_message = ?, status_message_ar = ?, ended_at = datetime('now'), updated_at = datetime('now')
        WHERE id = ?`
-    ).run(friendly, friendly, batchId);
-    emitLessonEvent(db, lessonId, 'error', { error: friendly });
-    throw new Error(friendly);
+    ).run(classified.category, classified.messageAr, classified.messageAr, batchId);
+    emitLessonEvent(db, lessonId, 'error', { error: classified.messageAr });
+    throw new Error(classified.messageAr);
   } finally {
     activeLessonRuns.delete(lessonId);
   }
@@ -1831,6 +2199,9 @@ export function resumeLessonPipelineAsync(
   if (!summary) {
     throw new Error('الدرس غير موجود');
   }
+  if (!summary.fileAvailable) {
+    throw new Error('ملف PDF الأصلي للدرس لم يعد موجوداً على الخادم؛ يرجى إعادة رفع الملف لاستكمال التوليد.');
+  }
   if (!options.runner) {
     createDefaultGeminiRunner();
   }
@@ -1852,6 +2223,8 @@ export function cancelLessonPipeline(db: Database.Database, lessonId: string): L
     `UPDATE lesson_question_batches
      SET cancel_requested = 1,
          pipeline_stage = CASE WHEN pipeline_stage IN ('batch_paused','failed') THEN 'cancelled' ELSE pipeline_stage END,
+         last_batch_status = CASE WHEN pipeline_stage IN ('batch_paused','failed') THEN 'cancelled' ELSE last_batch_status END,
+         ended_at = CASE WHEN pipeline_stage IN ('batch_paused','failed') THEN datetime('now') ELSE ended_at END,
          status_message_ar = 'تم طلب إيقاف المعالجة مع الحفاظ على الأسئلة الصالحة...',
          updated_at = datetime('now')
      WHERE lesson_id = ?`
@@ -1864,10 +2237,11 @@ export function getLessonBatchSummary(db: Database.Database, lessonId: string): 
   const row = db
     .prepare(
       `SELECT l.id as lesson_id, l.title, l.subject, l.age_group, l.difficulty, l.created_at,
-              d.filename, d.page_count, d.is_scanned, d.analysis_json, d.objectives_json, d.parsed_summary_json,
+              d.filename, d.page_count, d.is_scanned, d.storage_path, d.analysis_json, d.objectives_json, d.parsed_summary_json,
               b.id as batch_id, b.bank_id, b.pipeline_stage, b.stage_logs_json,
-              b.requested_count, b.generated_count, b.verified_count, b.rejected_count,
-              b.completed_batches, b.total_batches, b.current_batch_size, b.failed_batch_index,
+              b.requested_count, b.received_count, b.accepted_count, b.generated_count, b.verified_count, b.rejected_count,
+              b.completed_batches, b.failed_batches, b.total_batches, b.current_batch_size, b.failed_batch_index,
+              b.last_batch_status, b.error_category, b.model_used, b.started_at, b.ended_at,
               b.status_message_ar, b.diagnostic_logs_json, b.insufficient_content_note, b.error_message
        FROM lessons l
        JOIN lesson_documents d ON d.lesson_id = l.id
@@ -1897,6 +2271,18 @@ export function getLessonBatchSummary(db: Database.Database, lessonId: string): 
   const telemetry = lessonRunTelemetry.get(String(row.lesson_id));
   const diagnostics = JSON.parse(String(row.diagnostic_logs_json || '[]')) as DiagnosticLogEntry[];
   const cacheHit = telemetry?.cacheHit ?? diagnostics.some((d) => d.cacheHit === true);
+  const storagePath = row.storage_path ? String(row.storage_path) : '';
+  const fileAvailable = Boolean(storagePath && fs.existsSync(storagePath));
+  const modelRaw = String(row.model_used || DEFAULT_AI_MODEL);
+  const modelUsed: AllowedAiModel = isAllowedAiModel(modelRaw) ? modelRaw : DEFAULT_AI_MODEL;
+  const lastStatusRaw = String(row.last_batch_status || 'idle');
+  const lastBatchStatus: LessonBatchSummary['lastBatchStatus'] =
+    lastStatusRaw === 'completed' ||
+    lastStatusRaw === 'paused' ||
+    lastStatusRaw === 'failed' ||
+    lastStatusRaw === 'cancelled'
+      ? lastStatusRaw
+      : 'idle';
 
   return {
     id: String(row.batch_id),
@@ -1915,16 +2301,25 @@ export function getLessonBatchSummary(db: Database.Database, lessonId: string): 
     objectives,
     coverageSummary: parsedSummary.coverageSummary ?? '',
     requestedCount: Number(row.requested_count || 10),
+    receivedCount: Number(row.received_count || row.generated_count || 0),
+    acceptedCount: Math.max(actualTotal, Number(row.accepted_count || 0)),
     generatedCount: Number(row.generated_count || 0),
     verifiedCount: actualTotal,
     rejectedCount: Number(row.rejected_count || 0),
     needsReviewCount: Number(counts?.needs_review || 0),
     publishedCount: Number(counts?.published || 0),
     completedBatches: Number(row.completed_batches || 0),
+    failedBatches: Number(row.failed_batches || 0),
     totalBatches: Number(row.total_batches || 0),
     currentBatchSize: Number(row.current_batch_size || 8),
     failedBatchIndex:
       row.failed_batch_index !== null && row.failed_batch_index !== undefined ? Number(row.failed_batch_index) : null,
+    lastBatchStatus,
+    errorCategory: (row.error_category ? String(row.error_category) : null) as LessonErrorCategory | null,
+    modelUsed,
+    startedAt: row.started_at ? String(row.started_at) : null,
+    endedAt: row.ended_at ? String(row.ended_at) : null,
+    fileAvailable,
     statusMessageAr: String(row.status_message_ar || ''),
     insufficientContentNote: String(row.insufficient_content_note || ''),
     diagnosticLogs: diagnostics,
@@ -1999,7 +2394,7 @@ export async function regenerateRejectedForLesson(
     runner,
     pdfBase64,
     pageSliceText,
-    model: 'gemini-4-hydrogen',
+    model: getConfiguredAiModel(db),
     systemInstruction: 'أعد JSON مطابقاً للمخطط فقط. لا تكرر ولا تخترع معلومات من خارج النص.',
     prompt,
     responseSchema: BATCH_RESPONSE_SCHEMA,

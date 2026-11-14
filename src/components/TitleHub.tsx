@@ -188,13 +188,13 @@ export function TitleHub({
                 منصة المسابقات الذكية لحلقات وطلاب وعائلات مسجد ابن تيمية
               </h1>
               <p className="text-base sm:text-lg text-slate-300 leading-relaxed max-w-xl">
-                ١١ نمط تحدٍ تفاعلي بين الفرق والأفراد خلال ٣٠ ثانية، تحكّم لحظي للمشرف وشاشة عرض سينمائية للبروجكتر، مع استوديو تحويل دروس PDF إلى مسابقات موثّقة.
+                ١٢ نمط تحدٍ تفاعلي (منها تحدي «مين يزوّد») بين الفرق والأفراد خلال ٣٠ ثانية، تحكّم لحظي للمشرف وشاشة عرض سينمائية للبروجكتر، مع استوديو تحويل دروس PDF إلى مسابقات موثّقة.
               </p>
             </div>
 
             {/* Clean Typographic Value Line (No pills) */}
             <div className="flex flex-wrap items-center justify-center lg:justify-start gap-x-3 gap-y-1 text-xs sm:text-sm text-sky-200 font-bold">
-              <span>١١ نوع جولة متجددة</span>
+              <span>١٢ نوع جولة متجددة</span>
               <span aria-hidden="true" className="text-slate-500">·</span>
               <span>منع تكرار الأسئلة لكل حساب</span>
               <span aria-hidden="true" className="text-slate-500">·</span>

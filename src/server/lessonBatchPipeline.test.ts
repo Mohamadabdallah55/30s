@@ -7,13 +7,18 @@ import {
   buildLessonDistributionPlan,
   cancelLessonPipeline,
   createLessonBatchJob,
+  DEFAULT_AI_MODEL,
   type GeminiRunner,
   GeneratedBatchResponseSchema,
+  getConfiguredAiModel,
   getLessonBatchSummary,
   InvalidJsonResponseError,
   parseStructuredResponseStrict,
   processLessonBatches,
+  QuotaExhaustedError,
+  resumeLessonPipelineAsync,
   runLessonPipeline,
+  setConfiguredAiModel,
   TransientNetworkError,
 } from './lessonStudio';
 import { seedDatabase } from './seed';
@@ -516,5 +521,166 @@ test('buildLessonDistributionPlan respects batch bounds (5-10) and cancelLessonP
     storage_path: string;
   };
   if (doc?.storage_path && fs.existsSync(doc.storage_path)) fs.unlinkSync(doc.storage_path);
+  db.close();
+});
+
+test('Free Tier model policy defaults to gemini-4-hydrogen and strictly rejects paid models like gemini-4-argon', () => {
+  const db = createDatabase(':memory:');
+  seedDatabase(db);
+  assert.equal(getConfiguredAiModel(db), DEFAULT_AI_MODEL);
+  assert.equal(getConfiguredAiModel(db), 'gemini-4-hydrogen');
+
+  const lite = setConfiguredAiModel(db, 'gemini-3.1-flash-lite');
+  assert.equal(lite, 'gemini-3.1-flash-lite');
+  assert.equal(getConfiguredAiModel(db), 'gemini-3.1-flash-lite');
+
+  assert.throws(() => setConfiguredAiModel(db, 'gemini-4-argon'));
+  assert.throws(() => setConfiguredAiModel(db, 'gemini-2.5-pro'));
+  db.close();
+});
+
+test('GeneratedBatchResponseSchema normalizes non-enum cognitiveSkill strings without throwing SchemaValidationError', () => {
+  const parsed = GeneratedBatchResponseSchema.parse({
+    questions: [
+      {
+        roundType: 'multiple_choice',
+        prompt: 'ما الشرط الذي قبل النبي صلى الله عليه وسلم توقيعه في صلح الحديبية؟',
+        options: ['الهدنة عشر سنين', 'إلغاء العمرة نهائياً', 'دفع جزية', 'ترك المدينة'],
+        acceptableAnswers: ['الهدنة عشر سنين'],
+        correctIndex: 0,
+        cognitiveSkill: 'التحليل والاستنتاج التاريخي',
+        sourcePage: '8',
+        sourceExcerpt: 'واتفقا على وضع الحرب عشر سنين',
+        confidenceScore: 1.5,
+      },
+    ],
+  });
+  assert.equal(parsed.questions.length, 1);
+  assert.equal(parsed.questions[0].cognitiveSkill, 'inference');
+  assert.equal(parsed.questions[0].sourcePage, 8);
+  assert.equal(parsed.questions[0].confidenceScore, 1);
+});
+
+test('Free Tier daily quota exhaustion stops immediately, saves partial batches cleanly, and reports honest 0-saved status when 0 saved', async () => {
+  const db = createDatabase(':memory:');
+  seedDatabase(db);
+
+  // Case A: quota exhausted before first batch saves -> must honestly show 0 saved and errorCategory='quota_exhausted'
+  const zeroQuotaRunner: GeminiRunner = {
+    async generateStructuredJson({ prompt }) {
+      if (prompt.includes('readabilityOk')) {
+        return {
+          finishReason: 'STOP',
+          candidateTokens: 350,
+          text: JSON.stringify({
+            readabilityOk: true,
+            readabilityNote: 'واضح',
+            actualPageCount: 10,
+            isReligiousContent: true,
+            topics: [{ title: 'صلح الحديبية', pageNumbers: [1, 2], keyConcepts: ['الهدنة'] }],
+            pageSummaries: Array.from({ length: 10 }, (_, i) => ({
+              page: i + 1,
+              summary: `ملخص صفحة ${i + 1}`,
+            })),
+            objectives: ['فهم الحدث'],
+            estimatedMaxDistinctQuestions: 30,
+            coverageSummary: 'ملخص',
+          }),
+        };
+      }
+      throw new QuotaExhaustedError('نفدت الحصة المجانية اليومية للطلبات (Free Tier Quota Exceeded).', {
+        retryDelaySec: 3600,
+        isDailyLimit: true,
+      });
+    },
+  };
+
+  const zeroRes = await runLessonPipeline(
+    db,
+    {
+      lessonTitle: 'درس نفاد الحصة عند البداية',
+      subject: 'السيرة النبوية',
+      ageGroup: 'adults',
+      difficulty: 'hard',
+      requestedCount: 20,
+      allowedRoundTypes: ['multiple_choice', 'true_false'],
+      createdBy: 'prof-teacher-1',
+      pdfBuffer: makeValidPdfBuffer(10),
+      filename: 'quota_zero.pdf',
+    },
+    zeroQuotaRunner
+  );
+
+  assert.equal(zeroRes.pipelineStage, 'batch_paused');
+  assert.equal(zeroRes.verifiedCount, 0);
+  assert.equal(zeroRes.errorCategory, 'quota_exhausted');
+  assert.equal(zeroRes.lastBatchStatus, 'paused');
+  assert.equal(zeroRes.modelUsed, 'gemini-4-hydrogen');
+  assert.ok(zeroRes.failedBatches >= 1);
+  assert.ok(zeroRes.statusMessageAr.includes('0 من أصل 20'), `Unexpected status: ${zeroRes.statusMessageAr}`);
+  assert.ok(zeroRes.statusMessageAr.includes('لم يُحفظ أي سؤال'));
+  assert.ok(!zeroRes.statusMessageAr.includes('20 من أصل 20'));
+
+  const doc = db.prepare(`SELECT storage_path FROM lesson_documents WHERE lesson_id = ?`).get(zeroRes.lessonId) as {
+    storage_path: string;
+  };
+  if (doc?.storage_path && fs.existsSync(doc.storage_path)) fs.unlinkSync(doc.storage_path);
+  db.close();
+});
+
+test('Analysis stage falls back to compact schema when large PDF hits MAX_TOKENS and blocks resume if PDF file missing', async () => {
+  const db = createDatabase(':memory:');
+  seedDatabase(db);
+  let analysisAttempts = 0;
+  const baseMock = createHudaybiyyahMockRunner().runner;
+
+  const compactFallbackRunner: GeminiRunner = {
+    async generateStructuredJson(params) {
+      if (params.prompt.includes('readabilityOk')) {
+        analysisAttempts++;
+        if (analysisAttempts === 1) {
+          return {
+            finishReason: 'MAX_TOKENS',
+            candidateTokens: 8192,
+            text: '{"readabilityOk":true,"pageTexts":[{"page":1,"text":"محتوى طويل انقطع',
+          };
+        }
+      }
+      return baseMock.generateStructuredJson(params);
+    },
+  };
+
+  const summary = await runLessonPipeline(
+    db,
+    {
+      lessonTitle: 'اختبار تعافي تحليل الملف الكبير',
+      subject: 'السيرة النبوية',
+      ageGroup: 'adults',
+      difficulty: 'hard',
+      requestedCount: 10,
+      allowedRoundTypes: ['multiple_choice', 'true_false'],
+      createdBy: 'prof-teacher-1',
+      pdfBuffer: makeValidPdfBuffer(17),
+      filename: 'large_compact_fallback.pdf',
+    },
+    compactFallbackRunner
+  );
+
+  assert.equal(analysisAttempts, 2);
+  assert.equal(summary.verifiedCount, 10);
+  assert.equal(summary.fileAvailable, true);
+
+  // Remove physical PDF -> getLessonBatchSummary must report fileAvailable=false and resumeLessonPipelineAsync must fail synchronously
+  const doc = db.prepare(`SELECT storage_path FROM lesson_documents WHERE lesson_id = ?`).get(summary.lessonId) as {
+    storage_path: string;
+  };
+  if (doc?.storage_path && fs.existsSync(doc.storage_path)) fs.unlinkSync(doc.storage_path);
+
+  const missingCheck = getLessonBatchSummary(db, summary.lessonId);
+  assert.equal(missingCheck?.fileAvailable, false);
+  assert.throws(
+    () => resumeLessonPipelineAsync(db, summary.lessonId, { retryOnlyFailedBatch: false }),
+    /ملف PDF/
+  );
   db.close();
 });

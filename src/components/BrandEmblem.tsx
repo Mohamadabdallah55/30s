@@ -145,16 +145,36 @@ export function PlayerAvatar({ avatarId, size = 'md' }: { avatarId?: string; siz
   );
 }
 
-export function SessionQrBadge({ code, url }: { code: string; url: string }) {
-  const matrix = buildSessionMatrix(`${code}|${url}`);
-  const cell = 4;
-  const size = matrix.length * cell;
+export function SessionQrBadge({
+  code,
+  url,
+  size = 'md',
+}: {
+  code: string;
+  url: string;
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  const payload = url?.trim() || code;
+  const matrix = buildSessionMatrix(payload);
+  const pixelSize = size === 'sm' ? 108 : size === 'lg' ? 184 : 144;
+  const modulesCount = matrix.length;
+  const quiet = 2;
+  const viewBoxSize = modulesCount + quiet * 2;
   return (
-    <div className="p-2 bg-white rounded-xl inline-block">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-label={`رمز ربط الجلسة ${code}`}>
+    <div className="p-2.5 bg-white rounded-2xl inline-block shadow-lg">
+      <svg
+        width={pixelSize}
+        height={pixelSize}
+        viewBox={`0 0 ${viewBoxSize} ${viewBoxSize}`}
+        shapeRendering="crispEdges"
+        aria-label={`رمز QR لربط الجلسة ${code}`}
+      >
+        <rect x={0} y={0} width={viewBoxSize} height={viewBoxSize} fill="#FFFFFF" />
         {matrix.map((row, r) =>
           row.map((on, c) =>
-            on ? <rect key={`${r}-${c}`} x={c * cell} y={r * cell} width={cell} height={cell} fill="#09143A" /> : null
+            on ? (
+              <rect key={`${r}-${c}`} x={c + quiet} y={r + quiet} width={1} height={1} fill="#09143A" />
+            ) : null
           )
         )}
       </svg>

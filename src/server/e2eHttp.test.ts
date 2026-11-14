@@ -541,3 +541,143 @@ test('HTTP & WS E2E: Continuous rapid_fire clock, post-timeout guard, buzz wrong
     controller.abort();
   });
 });
+
+test('HTTP E2E: Free Tier AI model settings RBAC, multi-category packs, and مين يزوّد (bid_challenge) full gameplay', async () => {
+  await withServer(async (baseUrl) => {
+    const teacherLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'teacher@ibntaymiyyah.org', password: '1447' }),
+    });
+    const teacherToken = ((await teacherLogin.json()) as { token: string }).token;
+
+    // 1. Protected AI model endpoint: unauth -> 401, paid model -> 400, Free Tier flash -> 200, no secrets exposed
+    const unauthSettings = await fetch(`${baseUrl}/api/settings/ai-model`);
+    assert.equal(unauthSettings.status, 401);
+
+    const getSettings = await fetch(`${baseUrl}/api/settings/ai-model`, {
+      headers: { Authorization: `Bearer ${teacherToken}` },
+    });
+    assert.equal(getSettings.status, 200);
+    const settingsJson = (await getSettings.json()) as {
+      model: string;
+      allowedModels: Array<{ id: string }>;
+      freeTierNoticeAr: string;
+    };
+    assert.equal(settingsJson.model, 'gemini-4-hydrogen');
+    assert.ok(settingsJson.freeTierNoticeAr.includes('Free Tier'));
+    assert.equal(JSON.stringify(settingsJson).includes('GEMINI_API_KEY'), false);
+
+    const rejectPaid = await fetch(`${baseUrl}/api/settings/ai-model`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${teacherToken}` },
+      body: JSON.stringify({ model: 'gemini-4-argon' }),
+    });
+    assert.equal(rejectPaid.status, 400);
+
+    const acceptLite = await fetch(`${baseUrl}/api/settings/ai-model`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${teacherToken}` },
+      body: JSON.stringify({ model: 'gemini-3.1-flash-lite' }),
+    });
+    assert.equal(acceptLite.status, 200);
+
+    // 2. Multi-category availability & session filtering
+    const multiAvailRes = await fetch(
+      `${baseUrl}/api/questions/availability?bankId=bank-general-mosque&ageGroup=family&categories=${encodeURIComponent(
+        'الأردن والعالم العربي,الرياضة وكرة القدم,قصص الأنبياء'
+      )}`
+    );
+    assert.equal(multiAvailRes.status, 200);
+    const multiAvail = (await multiAvailRes.json()) as {
+      totalPublishedInFilter: number;
+      byCategory: Record<string, { total: number; unseen: number }>;
+    };
+    assert.ok(multiAvail.totalPublishedInFilter >= 3);
+    assert.ok(Object.keys(multiAvail.byCategory).length >= 3);
+
+    // 3. Full مين يزوّد (bid_challenge) gameplay via HTTP without any Gemini call
+    const bidCreate = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${teacherToken}` },
+      body: JSON.stringify({
+        title: 'اختبار جولة مين يزوّد',
+        bankId: 'bank-general-mosque',
+        ageGroup: 'family',
+        categories: ['الأردن والعالم العربي', 'الرياضة وكرة القدم', 'قصص الأنبياء', 'القرآن الكريم'],
+        roundTypes: ['bid_challenge'],
+        teams: [
+          { name: 'الأول', color: '#38BDF8' },
+          { name: 'الثاني', color: '#F59E0B' },
+        ],
+        skipVs: true,
+      }),
+    });
+    assert.equal(bidCreate.status, 201);
+    const bidSession = ((await bidCreate.json()) as { session: GameSessionView }).session;
+    assert.ok(bidSession.bidState);
+    assert.equal(bidSession.bidState.phase, 'bidding');
+    assert.equal(bidSession.timerRunning, false);
+
+    // Raise bid to 2
+    const raiseRes = await fetch(`${baseUrl}/api/sessions/${bidSession.code}/bid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'bid_raise', payload: { teamIndex: 1, increment: 1 } }),
+    });
+    assert.equal(raiseRes.status, 200);
+    const raised = ((await raiseRes.json()) as { session: GameSessionView }).session;
+    assert.equal(raised.bidState?.currentBid, 2);
+    assert.equal(raised.bidState?.bidderTeamIndex, 1);
+
+    // Challenge -> starts 30s execution timer
+    const challengeRes = await fetch(`${baseUrl}/api/sessions/${bidSession.code}/bid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'bid_challenge', payload: {} }),
+    });
+    assert.equal(challengeRes.status, 200);
+    const challenged = ((await challengeRes.json()) as { session: GameSessionView }).session;
+    assert.equal(challenged.bidState?.phase, 'executing');
+    assert.equal(challenged.timerRunning, true);
+
+    // Inspect secret acceptableAnswers as host
+    const hostViewRes = await fetch(`${baseUrl}/api/sessions/${bidSession.code}?role=host`, {
+      headers: { Authorization: `Bearer ${teacherToken}` },
+    });
+    const hostView = ((await hostViewRes.json()) as { session: GameSessionView }).session;
+    const ans1 = hostView.hostSecret!.acceptableAnswers[0];
+    const ans2 = hostView.hostSecret!.acceptableAnswers[1];
+    assert.ok(ans1 && ans2);
+
+    // Submit 1st valid answer
+    const rec1 = await fetch(`${baseUrl}/api/sessions/${bidSession.code}/bid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'bid_record_answer', payload: { answerText: ans1, hostConfirmed: false } }),
+    });
+    assert.equal(rec1.status, 200);
+
+    // Duplicate answer must return 409 and NOT increment acceptedAnswers
+    const dupRes = await fetch(`${baseUrl}/api/sessions/${bidSession.code}/bid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'bid_record_answer', payload: { answerText: ans1, hostConfirmed: false } }),
+    });
+    assert.equal(dupRes.status, 409);
+    const dupJson = (await dupRes.json()) as { session: GameSessionView };
+    assert.equal(dupJson.session.bidState?.acceptedAnswers.length, 1);
+    assert.ok(dupJson.session.bidState?.lastDuplicateWarning);
+
+    // Submit 2nd valid answer -> reaches bid 2 -> auto-completes and awards 3 points to team 1!
+    const rec2 = await fetch(`${baseUrl}/api/sessions/${bidSession.code}/bid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'bid_record_answer', payload: { answerText: ans2, hostConfirmed: false } }),
+    });
+    assert.equal(rec2.status, 200);
+    const completed = ((await rec2.json()) as { session: GameSessionView }).session;
+    assert.equal(completed.answerRevealed, true);
+    assert.equal(completed.teams[1].points, 3);
+  });
+});

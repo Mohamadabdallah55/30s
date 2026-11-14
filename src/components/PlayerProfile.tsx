@@ -80,7 +80,7 @@ export function PlayerProfile({ user, onBack, onOpenAuth, onLogout }: PlayerProf
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-white/10 text-sm font-bold"
           >
             <ArrowRight className="w-4 h-4" />
-            <span>العودة للرئيسية</span>
+            <span>عودة خطوة</span>
           </button>
 
           {prof ? (

@@ -134,6 +134,17 @@ export const ROUND_RULES: Record<RoundType, RoundRuleMeta> = {
     multiQuestionWithinTimer: false,
     questionsPerRound: 3,
   },
+  bid_challenge: {
+    type: 'bid_challenge',
+    nameAr: 'مين يزوّد',
+    shortDescAr: 'مزايدة عددية بين الفريقين ثم تحدي ذكر الإجابات خلال 30 ثانية',
+    rulesBulletAr: 'يرفع الفريقان السقف بالعدد؛ عند التحدي يحصل الفائز بالمزايدة على 30 ثانية: إذا حقق العدد كسب 3 نقاط، وإلا كسب المنافس نقطتين (لا نقاط للمزايدة نفسها).',
+    defaultDurationSec: 30,
+    basePoints: 3,
+    multiplier: 1,
+    multiQuestionWithinTimer: false,
+    questionsPerRound: 2,
+  },
 };
 
 export const ALL_ROUND_TYPES: RoundType[] = Object.keys(ROUND_RULES) as RoundType[];
@@ -235,7 +246,7 @@ export const MATCH_PRESETS: MatchPreset[] = [
     difficulty: 'hard',
     difficultyLevel: 4,
     timerSec: 30,
-    roundTypes: ['buzzer', 'memory', 'order_items', 'odd_one_out', 'who_am_i', 'golden'],
+    roundTypes: ['buzzer', 'memory', 'order_items', 'odd_one_out', 'who_am_i', 'bid_challenge', 'golden'],
   },
   {
     id: 'buds',
@@ -375,6 +386,30 @@ export function calculateQuestionPoints(params: {
   }
 
   return Math.max(1, Math.round(base * Math.max(1, round.multiplier)));
+}
+
+export function resolveBidChallengePoints(params: {
+  currentBid: number;
+  bidderTeamIndex: number;
+  acceptedCount: number;
+  teamCount: number;
+  multiplier?: number;
+}): { succeeded: boolean; winnerTeamIndex: number; pointsAwarded: number } {
+  const mult = Math.max(1, params.multiplier ?? 1);
+  const succeeded = params.acceptedCount >= Math.max(1, params.currentBid);
+  if (succeeded) {
+    return {
+      succeeded: true,
+      winnerTeamIndex: params.bidderTeamIndex,
+      pointsAwarded: 3 * mult,
+    };
+  }
+  const opponentIndex = params.teamCount > 1 ? (params.bidderTeamIndex === 0 ? 1 : 0) : params.bidderTeamIndex;
+  return {
+    succeeded: false,
+    winnerTeamIndex: opponentIndex,
+    pointsAwarded: params.teamCount > 1 ? 2 * mult : 0,
+  };
 }
 
 export function evaluateAnswerMatch(

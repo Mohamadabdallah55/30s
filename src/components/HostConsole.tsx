@@ -36,6 +36,8 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [confirmEndOpen, setConfirmEndOpen] = useState(false);
+  const [bidAnswerInput, setBidAnswerInput] = useState('');
+  const [qrMode, setQrMode] = useState<'host' | 'projector'>('host');
 
   const { connected, reconnecting } = useSessionSocket(code, 'host', (next) => {
     setSession(next);
@@ -58,6 +60,30 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
       setError(err instanceof Error ? err.message : 'تعذر تنفيذ الإجراء');
     }
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (!session || session.phase === 'finished') return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (session.phase === 'vs') {
+          act('start_match');
+        } else {
+          act(session.timerRunning ? 'pause_timer' : 'start_timer');
+        }
+      } else if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        act('next_question');
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        if (!session.answerRevealed) act('reveal_answer');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [session?.code, session?.phase, session?.timerRunning, session?.answerRevealed]);
 
   const copyLink = (key: string, url: string) => {
     navigator.clipboard?.writeText(url).catch(() => {});
@@ -102,6 +128,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
   }
 
   const projectorUrl = `${window.location.origin}/?mode=projector&code=${session.code}`;
+  const hostPhoneUrl = `${window.location.origin}/?mode=host&code=${session.code}`;
   const round = session.rounds[session.currentRoundIndex];
   const roundMeta = round ? ROUND_RULES[round.roundType] : null;
   const q = session.currentQuestion;
@@ -124,7 +151,7 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
               className="px-3.5 py-2 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-white/10 text-xs font-bold inline-flex items-center gap-1.5"
             >
               <ArrowRight className="w-4 h-4" />
-              <span>الرئيسية</span>
+              <span>عودة خطوة</span>
             </button>
             <div>
               <h1 className="text-lg font-black text-white">لوحة تحكم المشرف والحكم</h1>
@@ -288,6 +315,126 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
                     </div>
                   )}
                 </div>
+
+                {/* Bid Challenge Referee Controls */}
+                {q.roundType === 'bid_challenge' && session.bidState && (
+                  <div className="rounded-xl bg-[#09143A] border border-amber-400/35 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="font-black text-amber-300">
+                        تحكم المشرف — مين يزوّد ({session.bidState.acceptedAnswers.length}/{session.bidState.currentBid})
+                      </span>
+                      <span className="text-slate-300">
+                        المزايد:{' '}
+                        <strong className="text-white">
+                          {session.teams[session.bidState.bidderTeamIndex]?.name}
+                        </strong>
+                      </span>
+                    </div>
+
+                    {session.bidState.phase === 'bidding' ? (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            act('bid_raise', { teamIndex: session.bidState!.turnTeamIndex, increment: 1 })
+                          }
+                          className="px-3.5 py-2 rounded-xl bg-sky-400 text-slate-950 text-xs font-black"
+                        >
+                          +1 مزايدة ({session.teams[session.bidState.turnTeamIndex]?.name})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            act('bid_raise', { teamIndex: session.bidState!.turnTeamIndex, increment: 2 })
+                          }
+                          className="px-3.5 py-2 rounded-xl bg-violet-600 text-white text-xs font-black"
+                        >
+                          +2 مزايدة
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => act('bid_challenge', {})}
+                          className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-black"
+                        >
+                          تحدّاه الآن (ابدأ الـ30ث)
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {secret?.acceptableAnswers && secret.acceptableAnswers.length > 0 && !session.answerRevealed && (
+                          <div className="space-y-1">
+                            <div className="text-[11px] text-slate-400">
+                              نقرة سريعة لتسجيل ما يذكره المتسابق شفهياً:
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {secret.acceptableAnswers.map((ans) => {
+                                const already = session.bidState!.acceptedAnswers.includes(ans);
+                                return (
+                                  <button
+                                    key={ans}
+                                    type="button"
+                                    disabled={already}
+                                    onClick={() => act('bid_record_answer', { answerText: ans, hostConfirmed: true })}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${
+                                      already
+                                        ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 opacity-60'
+                                        : 'bg-[#101E52] border-sky-400/30 hover:border-sky-300 text-white'
+                                    }`}
+                                  >
+                                    {already ? `✓ ${ans}` : `+ ${ans}`}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {!session.answerRevealed && (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              if (bidAnswerInput.trim()) {
+                                act('bid_record_answer', {
+                                  answerText: bidAnswerInput.trim(),
+                                  hostConfirmed: true,
+                                });
+                                setBidAnswerInput('');
+                              }
+                            }}
+                            className="flex gap-2"
+                          >
+                            <input
+                              type="text"
+                              value={bidAnswerInput}
+                              onChange={(e) => setBidAnswerInput(e.target.value)}
+                              placeholder="أو اكتب إجابة مقبولة يدوياً..."
+                              className="flex-1 rounded-lg bg-[#101E52] border border-slate-600 px-3 py-2 text-xs text-white outline-none"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!bidAnswerInput.trim()}
+                              className="px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-xs font-black disabled:opacity-50"
+                            >
+                              اعتماد
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => act('bid_complete', {})}
+                              className="px-3.5 py-2 rounded-lg bg-amber-400 text-slate-950 text-xs font-black"
+                            >
+                              حسم التحدي
+                            </button>
+                          </form>
+                        )}
+                        {session.bidState.lastDuplicateWarning && (
+                          <div className="text-xs font-bold text-amber-300">
+                            {session.bidState.lastDuplicateWarning}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Referee Action Buttons */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -557,11 +704,51 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
               </div>
             </div>
 
-            {/* QR Linking */}
-            <div className="rounded-2xl bg-[#101E52] border border-sky-400/25 p-4 text-center space-y-2">
-              <h2 className="text-sm font-extrabold text-white">رمز ربط شاشة الجمهور (QR)</h2>
-              <SessionQrBadge code={session.code} url={projectorUrl} />
+            {/* QR Linking (Host Phone & Projector) */}
+            <div className="rounded-2xl bg-[#101E52] border border-sky-400/25 p-4 text-center space-y-3">
+              <h2 className="text-sm font-extrabold text-white">ربط الجوال والبروجكتر (QR)</h2>
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[#09143A] text-[11px] font-bold">
+                <button
+                  type="button"
+                  onClick={() => setQrMode('host')}
+                  className={`py-1.5 rounded-lg transition-colors ${
+                    qrMode === 'host' ? 'bg-emerald-400 text-slate-950' : 'text-slate-300'
+                  }`}
+                >
+                  جوال الأستاذ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQrMode('projector')}
+                  className={`py-1.5 rounded-lg transition-colors ${
+                    qrMode === 'projector' ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
+                  }`}
+                >
+                  شاشة الجمهور
+                </button>
+              </div>
+              <SessionQrBadge
+                code={session.code}
+                url={qrMode === 'host' ? hostPhoneUrl : projectorUrl}
+                size="md"
+              />
               <div className="font-mono text-lg font-black text-amber-300 tracking-widest">{session.code}</div>
+              <button
+                type="button"
+                onClick={() =>
+                  copyLink(qrMode === 'host' ? 'host' : 'projector-qr', qrMode === 'host' ? hostPhoneUrl : projectorUrl)
+                }
+                className="w-full py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] font-bold inline-flex items-center justify-center gap-1"
+              >
+                <Copy className="w-3 h-3" />
+                <span>
+                  {copiedKey === (qrMode === 'host' ? 'host' : 'projector-qr')
+                    ? 'تم النسخ!'
+                    : qrMode === 'host'
+                    ? 'نسخ رابط تحكم الأستاذ'
+                    : 'نسخ رابط الجمهور'}
+                </span>
+              </button>
             </div>
 
             {/* Objections Review */}
@@ -603,6 +790,9 @@ export function HostConsole({ code, onBack, onOpenProjector }: HostConsoleProps)
               )}
             </div>
           </div>
+        </div>
+        <div className="text-center text-[11px] text-slate-400 pt-1">
+          اختصارات المشرف: Space بدء/إيقاف المؤقت · N السؤال التالي · R إظهار الإجابة
         </div>
       </div>
 

@@ -27,7 +27,33 @@ export type RoundType =
   | 'order_items'     // رتب العناصر: ترتيب وفق معيار معلن
   | 'memory'          // الذاكرة: عرض عناصر ثم إخفاؤها وقياس التذكر
   | 'buzzer'          // المواجهة بالجرس: أول فريق يضغط يحصل على فرصة الإجابة
-  | 'golden';         // الجولة الذهبية: مضاعف ×2 يطبق على جولة مختارة
+  | 'golden'          // الجولة الذهبية: مضاعف ×2 يطبق على جولة مختارة
+  | 'bid_challenge';  // مين يزوّد: مزايدة عددية ذكية ثم تنفيذ خلال 30 ثانية
+
+export type AllowedAiModel = 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
+
+export type LessonErrorCategory =
+  | 'rate_limit'
+  | 'quota_exhausted'
+  | 'timeout'
+  | 'network_interruption'
+  | 'invalid_json'
+  | 'validation_failure'
+  | 'database_failure'
+  | 'file_parsing_error'
+  | 'insufficient_content';
+
+export interface BidChallengeState {
+  phase: 'bidding' | 'executing' | 'judging';
+  currentBid: number;
+  bidderTeamIndex: number;
+  startingTeamIndex: number;
+  turnTeamIndex: number;
+  maxPossible: number;
+  challenged: boolean;
+  acceptedAnswers: string[];
+  lastDuplicateWarning?: string | null;
+}
 
 export interface RoundRuleMeta {
   type: RoundType;
@@ -214,6 +240,7 @@ export interface GameSessionView {
   ageGroup: AgeGroup;
   difficulty: Difficulty | 'mixed';
   category: string;
+  categories?: string[];
   phase: SessionPhase;
   teams: TeamState[];
   activeTeamIndex: number;
@@ -240,6 +267,7 @@ export interface GameSessionView {
   revealedClueCount: number;
   memoryPhase: 'memorize' | 'recall' | 'none';
   memoryRemainingSec: number;
+  bidState?: BidChallengeState | null;
   exhaustedNotice: {
     exhausted: boolean;
     message: string;
@@ -320,15 +348,24 @@ export interface LessonBatchSummary {
   objectives: string[];
   coverageSummary: string;
   requestedCount: number;
+  receivedCount: number;
+  acceptedCount: number;
   generatedCount: number;
   verifiedCount: number;
   rejectedCount: number;
   needsReviewCount: number;
   publishedCount: number;
   completedBatches: number;
+  failedBatches: number;
   totalBatches: number;
   currentBatchSize: number;
   failedBatchIndex: number | null;
+  lastBatchStatus: 'idle' | 'completed' | 'paused' | 'failed' | 'cancelled';
+  errorCategory?: LessonErrorCategory | null;
+  modelUsed?: AllowedAiModel;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  fileAvailable?: boolean;
   statusMessageAr: string;
   insufficientContentNote: string;
   diagnosticLogs: DiagnosticLogEntry[];

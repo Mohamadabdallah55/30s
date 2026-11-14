@@ -5,10 +5,13 @@ import fs from 'node:fs';
 import multer from 'multer';
 import type Database from 'better-sqlite3';
 import {
+  ALLOWED_AI_MODELS,
   cancelLessonPipeline,
+  getConfiguredAiModel,
   getLessonBatchSummary,
   regenerateRejectedForLesson,
   resumeLessonPipelineAsync,
+  setConfiguredAiModel,
   startLessonPipelineAsync,
   subscribeToLessonStream,
 } from './lessonStudio';
@@ -220,6 +223,12 @@ export function createAppAndHub(db: Database.Database) {
     const ageGroup = normalizeAgeGroup(String(req.query.ageGroup || 'family'));
     const difficulty = (String(req.query.difficulty || 'mixed') as Difficulty | 'mixed');
     const category = req.query.category ? String(req.query.category) : undefined;
+    const categories = req.query.categories
+      ? String(req.query.categories)
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean)
+      : undefined;
     const participantIds = req.query.participantIds
       ? String(req.query.participantIds).split(',').filter(Boolean)
       : [];
@@ -229,9 +238,33 @@ export function createAppAndHub(db: Database.Database) {
       ageGroup,
       difficulty,
       category,
+      categories,
       participantProfileIds: participantIds,
     });
     res.json(availability);
+  });
+
+  app.get('/api/settings/ai-model', requireRole(['admin', 'teacher']), (_req, res) => {
+    const model = getConfiguredAiModel(db);
+    res.json({
+      model,
+      allowedModels: ALLOWED_AI_MODELS,
+      freeTierNoticeAr:
+        'يستخدم استوديو PDF حصرياً نماذج Gemini Flash ضمن الحصة المجانية (Free Tier) بحدود طلبات يومية ولحظية ليست بلا حدود، ولا يُستخدم الذكاء الاصطناعي أثناء المباريات العادية إطلاقاً.',
+    });
+  });
+
+  app.put('/api/settings/ai-model', requireRole(['admin', 'teacher']), (req, res) => {
+    try {
+      const { model } = req.body as { model?: string };
+      const updated = setConfiguredAiModel(db, String(model || ''));
+      res.json({
+        model: updated,
+        allowedModels: ALLOWED_AI_MODELS,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'النموذج المختار غير مدعوم' });
+    }
   });
 
   app.get('/api/banks/:bankId/questions', requireRole(['admin', 'teacher']), (req, res) => {
@@ -741,6 +774,7 @@ export function createAppAndHub(db: Database.Database) {
         ageGroup?: AgeGroup;
         difficulty?: Difficulty | 'mixed';
         category?: string;
+        categories?: string[];
         teams?: Array<{ name: string; color: string; participantIds?: string[]; participantNames?: string[] }>;
         roundTypes?: RoundType[];
         roundOverrides?: Partial<Record<RoundType, Partial<RoundConfig>>>;
@@ -756,6 +790,7 @@ export function createAppAndHub(db: Database.Database) {
         ageGroup: normalizeAgeGroup(body.ageGroup || 'family'),
         difficulty: body.difficulty || 'mixed',
         category: body.category || 'الكل',
+        categories: body.categories,
         teams: body.teams || [],
         roundTypes: body.roundTypes || ['rapid_fire', 'multiple_choice', 'who_am_i', 'buzzer', 'golden'],
         roundOverrides: body.roundOverrides,
@@ -876,6 +911,33 @@ export function createAppAndHub(db: Database.Database) {
       return;
     }
     res.json({ session: view });
+  });
+
+  app.post('/api/sessions/:code/bid', (req: AuthedRequest, res) => {
+    const s = hub.getSessionInternal(req.params.code);
+    if (!s) {
+      res.status(404).json({ error: 'الجلسة غير موجودة' });
+      return;
+    }
+    const { action, payload } = req.body as { action: string; payload?: Record<string, unknown> };
+    const allowedPlayerActions = ['bid_raise', 'bid_challenge', 'bid_pass', 'bid_record_answer'];
+    if (!allowedPlayerActions.includes(action)) {
+      res.status(403).json({ error: 'إجراء المزايدة غير مصرح به' });
+      return;
+    }
+    const isAuthorizedHost =
+      !s.hostProfileId ||
+      (req.user && (req.user.role === 'admin' || req.user.role === 'teacher' || req.user.id === s.hostProfileId));
+    const result = hub.handleBidAction(req.params.code, action, payload || {}, Boolean(isAuthorizedHost));
+    if (!result) {
+      res.status(400).json({ error: 'جولة مين يزوّد غير نشطة حالياً' });
+      return;
+    }
+    if (!result.ok) {
+      res.status(409).json({ error: result.error, session: result.view });
+      return;
+    }
+    res.json({ session: result.view });
   });
 
   return { app, hub };

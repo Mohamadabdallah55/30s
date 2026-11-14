@@ -8,11 +8,14 @@ import {
   determineWinner,
   evaluateAnswerMatch,
   normalizeAgeGroup,
+  normalizeArabicText,
+  resolveBidChallengePoints,
   ROUND_RULES,
 } from '../shared/gameRules';
 import type {
   AgeGroup,
   AudienceQuestionView,
+  BidChallengeState,
   Difficulty,
   GameSessionView,
   QuestionObjection,
@@ -39,6 +42,7 @@ export interface InternalSessionState {
   ageGroup: AgeGroup;
   difficulty: Difficulty | 'mixed';
   category: string;
+  categories: string[];
   phase: SessionPhase;
   teams: TeamState[];
   activeTeamIndex: number;
@@ -62,6 +66,7 @@ export interface InternalSessionState {
   memoryPhase: 'memorize' | 'recall' | 'none';
   memoryRemainingSec: number;
   memoryEndsAtMs: number | null;
+  bidState: BidChallengeState | null;
   exhaustedNotice: GameSessionView['exhaustedNotice'];
   settings: SessionSettings;
   currentQuestion: QuestionRecord | null;
@@ -148,6 +153,10 @@ export class GameSessionHub {
             this.handleBuzz(code, msg.payload.teamIndex);
             return;
           }
+          if (msg.type === 'bid_raise' || msg.type === 'bid_challenge') {
+            this.handleBidAction(code, msg.type, msg.payload || {}, role === 'host');
+            return;
+          }
           if (role === 'host') {
             this.handleHostAction(code, msg.type, msg.payload || {});
           }
@@ -212,6 +221,9 @@ export class GameSessionHub {
       if (rem <= 0) {
         session.timerRunning = false;
         session.timerEndsAtMs = null;
+        if (session.bidState && session.bidState.phase === 'executing') {
+          session.bidState.phase = 'judging';
+        }
         changed = true;
       }
     }
@@ -227,6 +239,7 @@ export class GameSessionHub {
     ageGroup: AgeGroup;
     difficulty: Difficulty | 'mixed';
     category: string;
+    categories?: string[];
     teams: Array<{ name: string; color: string; participantIds?: string[]; participantNames?: string[] }>;
     roundTypes: RoundType[];
     roundOverrides?: Partial<Record<RoundType, Partial<RoundConfig>>>;
@@ -293,6 +306,7 @@ export class GameSessionHub {
       ageGroup: normalizeAgeGroup(params.ageGroup),
       difficulty: params.difficulty,
       category: params.category || 'الكل',
+      categories: (params.categories ?? []).filter((c) => c && c !== 'الكل'),
       phase: params.skipVs ? 'playing' : 'vs',
       teams,
       activeTeamIndex: 0,
@@ -316,6 +330,7 @@ export class GameSessionHub {
       memoryPhase: 'none',
       memoryRemainingSec: 0,
       memoryEndsAtMs: null,
+      bidState: null,
       exhaustedNotice: null,
       settings,
       currentQuestion: null,
@@ -429,6 +444,8 @@ export class GameSessionHub {
     parsed.previousLeaderIndex = parsed.previousLeaderIndex ?? null;
     parsed.leadChangedAtMs = parsed.leadChangedAtMs ?? null;
     parsed.lastAnsweredSlotKey = parsed.lastAnsweredSlotKey ?? null;
+    parsed.categories = parsed.categories ?? [];
+    parsed.bidState = parsed.bidState ?? null;
     this.sessionCache.set(normCode, parsed);
     return parsed;
   }
@@ -487,6 +504,7 @@ export class GameSessionHub {
       ageGroup: s.ageGroup,
       difficulty: s.difficulty,
       category: s.category,
+      categories: s.categories,
       phase: s.phase,
       teams: s.teams,
       activeTeamIndex: s.activeTeamIndex,
@@ -507,6 +525,7 @@ export class GameSessionHub {
       revealedClueCount: s.revealedClueCount,
       memoryPhase: s.memoryPhase,
       memoryRemainingSec: s.memoryRemainingSec,
+      bidState: s.bidState,
       exhaustedNotice: s.exhaustedNotice,
       settings: s.settings,
       currentQuestion: qView,
@@ -649,6 +668,7 @@ export class GameSessionHub {
       targetDifficultyLevel: adaptiveLevel,
       adaptiveDifficulty: s.settings.adaptiveDifficulty,
       category: s.category,
+      categories: s.categories,
       participantProfileIds: allParticipants,
       sessionId: s.id,
       recentSessionPrompts: s.recentPrompts.slice(-10),
@@ -657,6 +677,7 @@ export class GameSessionHub {
 
     if (draw.exhausted || !draw.question) {
       s.currentQuestion = null;
+      s.bidState = null;
       s.timerRunning = false;
       s.timerEndsAtMs = null;
       s.exhaustedNotice = {
@@ -677,8 +698,32 @@ export class GameSessionHub {
     s.lastAnsweredSlotKey = null;
     s.revealedClueCount = 1;
 
+    const effectiveType =
+      round.roundType === 'golden' && round.goldenTargetType ? round.goldenTargetType : round.roundType;
     const now = Date.now();
-    if (round.roundType === 'memory' && draw.question.memoryItems.length > 0) {
+    if (effectiveType === 'bid_challenge') {
+      const maxPossible = draw.question.acceptableAnswers.length >= 4 ? draw.question.acceptableAnswers.length : 12;
+      const starter = s.activeTeamIndex % Math.max(1, s.teams.length);
+      const nextTurn = s.teams.length > 1 ? (starter + 1) % s.teams.length : starter;
+      s.bidState = {
+        phase: 'bidding',
+        currentBid: 1,
+        bidderTeamIndex: starter,
+        startingTeamIndex: starter,
+        turnTeamIndex: nextTurn,
+        maxPossible,
+        challenged: false,
+        acceptedAnswers: [],
+        lastDuplicateWarning: null,
+      };
+      s.memoryPhase = 'none';
+      s.memoryRemainingSec = 0;
+      s.memoryEndsAtMs = null;
+      s.timerRemainingSec = round.durationSec;
+      s.timerRunning = false; // Countdown starts once challenged/accepted!
+      s.timerEndsAtMs = null;
+    } else if (round.roundType === 'memory' && draw.question.memoryItems.length > 0) {
+      s.bidState = null;
       const memSec = draw.question.memoryRevealSeconds || round.memoryRevealSec || 8;
       s.memoryPhase = 'memorize';
       s.memoryRemainingSec = memSec;
@@ -687,6 +732,7 @@ export class GameSessionHub {
       s.timerRemainingSec = round.durationSec;
       s.timerEndsAtMs = null;
     } else {
+      s.bidState = null;
       s.memoryPhase = 'none';
       s.memoryRemainingSec = 0;
       s.memoryEndsAtMs = null;
@@ -727,6 +773,207 @@ export class GameSessionHub {
     this.saveSession(s);
     this.broadcast(code);
     return this.projectView(s, false);
+  }
+
+  private completeBidChallengeInternal(s: InternalSessionState) {
+    const round = s.rounds[s.currentRoundIndex];
+    if (!round || !s.bidState || s.answerRevealed) return;
+    const slotKey = this.buildCurrentSlotKey(s);
+    if (slotKey && s.lastAnsweredSlotKey === slotKey) return;
+
+    this.pushUndo(s, 'حسم جولة مين يزوّد');
+    const result = resolveBidChallengePoints({
+      currentBid: s.bidState.currentBid,
+      bidderTeamIndex: s.bidState.bidderTeamIndex,
+      acceptedCount: s.bidState.acceptedAnswers.length,
+      teamCount: s.teams.length,
+      multiplier: round.multiplier,
+    });
+    const winnerTeam = s.teams[result.winnerTeamIndex];
+    if (winnerTeam && result.pointsAwarded > 0) {
+      winnerTeam.points += result.pointsAwarded;
+      winnerTeam.streak += 1;
+      for (const pid of winnerTeam.participantIds) {
+        if (!pid || pid.startsWith('guest-')) continue;
+        this.db
+          .prepare(`UPDATE profiles SET total_correct = total_correct + 1, xp = xp + ? WHERE id = ?`)
+          .run(result.pointsAwarded, pid);
+      }
+      this.recordAudit(
+        s,
+        result.winnerTeamIndex,
+        result.pointsAwarded,
+        result.succeeded
+          ? `نجاح مين يزوّد (${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid})`
+          : `فوز الخصم بتحدي مين يزوّد (${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid})`
+      );
+    }
+    if (!result.succeeded && s.teams[s.bidState.bidderTeamIndex]) {
+      s.teams[s.bidState.bidderTeamIndex].streak = 0;
+    }
+    s.stats.totalAnswered += 1;
+    if (result.succeeded) s.stats.totalCorrect += 1;
+
+    if (s.currentQuestion) {
+      this.db
+        .prepare(
+          `INSERT INTO answers (id, session_id, question_id, team_index, profile_id, submitted_answer, is_correct, points_delta)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          `ans-${crypto.randomUUID().slice(0, 8)}`,
+          s.id,
+          s.currentQuestion.id,
+          s.bidState.bidderTeamIndex,
+          null,
+          s.bidState.acceptedAnswers.join('، ') || 'لم تكتمل الإجابات',
+          result.succeeded ? 1 : 0,
+          result.pointsAwarded
+        );
+    }
+
+    const leadChanged = this.updateLeaderState(s);
+    const bidderName = s.teams[s.bidState.bidderTeamIndex]?.name ?? 'المزايد';
+    s.lastFeedback = {
+      type: result.succeeded ? (leadChanged ? 'lead_change' : 'correct') : 'wrong',
+      message: result.succeeded
+        ? `نجح ${bidderName} في ذكر ${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid}! +${result.pointsAwarded} نقاط`
+        : `توقّف ${bidderName} عند ${s.bidState.acceptedAnswers.length}/${s.bidState.currentBid} — كسب ${winnerTeam?.name ?? 'المنافس'} +${result.pointsAwarded} نقطتين`,
+      pointsDelta: result.pointsAwarded,
+      teamIndex: result.winnerTeamIndex,
+      atMs: Date.now(),
+    };
+
+    if (slotKey) s.lastAnsweredSlotKey = slotKey;
+    s.bidState.phase = 'judging';
+    s.answerRevealed = true;
+    s.timerRunning = false;
+    s.timerEndsAtMs = null;
+  }
+
+  handleBidAction(
+    code: string,
+    action: string,
+    payload: Record<string, unknown> = {},
+    isHost = false
+  ): { ok: boolean; error?: string; view: GameSessionView } | null {
+    const s = this.getSessionInternal(code);
+    if (!s || s.phase !== 'playing' || !s.bidState) return null;
+    this.syncLiveTimer(s);
+    const round = s.rounds[s.currentRoundIndex];
+    if (!round) return null;
+
+    const stripAl = (txt: string) => normalizeArabicText(txt).replace(/^ال/, '');
+
+    if (action === 'bid_raise') {
+      if (s.bidState.phase !== 'bidding') {
+        return { ok: false, error: 'انتهت مرحلة المزايدة وبدأ التنفيذ.', view: this.projectView(s, isHost) };
+      }
+      const teamIdx = typeof payload.teamIndex === 'number' ? payload.teamIndex : s.bidState.turnTeamIndex;
+      if (teamIdx < 0 || teamIdx >= s.teams.length) {
+        return { ok: false, error: 'الفريق المحدد غير صالح.', view: this.projectView(s, isHost) };
+      }
+      const inc = Number(payload.increment ?? 1);
+      const targetBid =
+        typeof payload.targetBid === 'number'
+          ? Math.round(payload.targetBid)
+          : s.bidState.currentBid + (inc >= 2 ? 2 : 1);
+
+      if (targetBid <= s.bidState.currentBid || targetBid > s.bidState.maxPossible) {
+        return {
+          ok: false,
+          error: `العدد يجب أن يكون بين ${s.bidState.currentBid + 1} و${s.bidState.maxPossible}.`,
+          view: this.projectView(s, isHost),
+        };
+      }
+
+      s.bidState.currentBid = targetBid;
+      s.bidState.bidderTeamIndex = teamIdx;
+      s.bidState.turnTeamIndex = s.teams.length > 1 ? (teamIdx + 1) % s.teams.length : teamIdx;
+      s.bidState.lastDuplicateWarning = null;
+
+      if (targetBid >= s.bidState.maxPossible) {
+        s.bidState.phase = 'executing';
+        s.bidState.challenged = true;
+        s.activeTeamIndex = teamIdx;
+        s.timerRemainingSec = round.durationSec;
+        s.timerRunning = true;
+        s.timerEndsAtMs = Date.now() + round.durationSec * 1000;
+      }
+
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, isHost) };
+    }
+
+    if (action === 'bid_challenge' || action === 'bid_pass') {
+      if (s.bidState.phase !== 'bidding') {
+        return { ok: false, error: 'بدأ التحدي بالفعل.', view: this.projectView(s, isHost) };
+      }
+      s.bidState.phase = 'executing';
+      s.bidState.challenged = true;
+      s.activeTeamIndex = s.bidState.bidderTeamIndex;
+      s.bidState.lastDuplicateWarning = null;
+      s.timerRemainingSec = round.durationSec;
+      s.timerRunning = true;
+      s.timerEndsAtMs = Date.now() + round.durationSec * 1000;
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, isHost) };
+    }
+
+    if (action === 'bid_record_answer') {
+      if (s.bidState.phase === 'bidding' || s.answerRevealed) {
+        return { ok: false, error: 'التحدي ليس في مرحلة استقبال الإجابات.', view: this.projectView(s, isHost) };
+      }
+      const raw = String(payload.answerText || '').trim();
+      const norm = stripAl(raw);
+      if (!norm) {
+        return { ok: false, error: 'أدخل إجابة غير فارغة.', view: this.projectView(s, isHost) };
+      }
+
+      const isDup = s.bidState.acceptedAnswers.some((existing) => stripAl(existing) === norm);
+      if (isDup) {
+        s.bidState.lastDuplicateWarning = `الإجابة «${raw}» مكررة في هذه الجولة ولا تُحتسب مرتين.`;
+        this.saveSession(s);
+        this.broadcast(code);
+        return { ok: false, error: s.bidState.lastDuplicateWarning, view: this.projectView(s, isHost) };
+      }
+
+      const hostConfirmed = Boolean(isHost && payload.hostConfirmed !== false);
+      const acceptable = s.currentQuestion?.acceptableAnswers ?? [];
+      if (!hostConfirmed && acceptable.length > 0) {
+        const matched = acceptable.some((acc) => {
+          const accNorm = stripAl(acc);
+          return accNorm === norm || (norm.length >= 3 && (accNorm.includes(norm) || norm.includes(accNorm)));
+        });
+        if (!matched) {
+          s.bidState.lastDuplicateWarning = `الإجابة «${raw}» غير مطابقة لقائمة هذا التحدي.`;
+          this.saveSession(s);
+          this.broadcast(code);
+          return { ok: false, error: s.bidState.lastDuplicateWarning, view: this.projectView(s, isHost) };
+        }
+      }
+
+      s.bidState.lastDuplicateWarning = null;
+      s.bidState.acceptedAnswers.push(raw);
+      if (s.bidState.acceptedAnswers.length >= s.bidState.currentBid) {
+        this.completeBidChallengeInternal(s);
+      }
+
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, isHost) };
+    }
+
+    if (action === 'bid_complete' && isHost) {
+      this.completeBidChallengeInternal(s);
+      this.saveSession(s);
+      this.broadcast(code);
+      return { ok: true, view: this.projectView(s, true) };
+    }
+
+    return null;
   }
 
   submitPlayerAnswer(
@@ -1270,8 +1517,22 @@ export class GameSessionHub {
         break;
       }
 
+      case 'bid_raise':
+      case 'bid_challenge':
+      case 'bid_pass':
+      case 'bid_record_answer':
+      case 'bid_complete': {
+        this.handleBidAction(code, action, payload, true);
+        break;
+      }
+
       case 'switch_category': {
         s.category = String(payload.category || 'الكل');
+        s.categories = Array.isArray(payload.categories)
+          ? payload.categories.map((c) => String(c)).filter((c) => c && c !== 'الكل')
+          : s.category !== 'الكل'
+          ? [s.category]
+          : [];
         this.drawQuestionForCurrentSlot(s, true);
         break;
       }

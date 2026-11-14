@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Bell,
+  Check,
   CheckCircle2,
+  Copy,
   Eye,
   Flame,
   Flag,
@@ -12,8 +15,10 @@ import {
   Pause,
   Play,
   Power,
+  QrCode,
   RotateCcw,
   SkipForward,
+  Smartphone,
   Sparkles,
   Trophy,
   Volume2,
@@ -23,9 +28,9 @@ import {
 } from 'lucide-react';
 import { determineWinner, normalizeArabicText, ROUND_RULES } from '../shared/gameRules';
 import type { GameSessionView } from '../shared/types';
-import { apiFetch, useSessionSocket } from '../utils/api';
+import { apiFetch, getAuthToken, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
-import { PlayerAvatar } from './BrandEmblem';
+import { PlayerAvatar, SessionQrBadge } from './BrandEmblem';
 
 interface GameArenaProps {
   initialSession: GameSessionView;
@@ -33,6 +38,7 @@ interface GameArenaProps {
   onToggleSound: () => void;
   onPlayAgain: () => void;
   onExit: () => void;
+  onGoHome?: () => void;
   onOpenHostPanel?: (code: string) => void;
 }
 
@@ -42,6 +48,7 @@ export function GameArena({
   onToggleSound,
   onPlayAgain,
   onExit,
+  onGoHome,
   onOpenHostPanel,
 }: GameArenaProps) {
   const [session, setSession] = useState<GameSessionView>(initialSession);
@@ -54,6 +61,11 @@ export function GameArena({
   const [showTypedSprint, setShowTypedSprint] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [confirmEndOpen, setConfirmEndOpen] = useState(false);
+  const [showVsQr, setShowVsQr] = useState(false);
+  const [copiedVsQr, setCopiedVsQr] = useState(false);
+  const [bidAnswerText, setBidAnswerText] = useState('');
+  const [bidError, setBidError] = useState<string | null>(null);
+  const [bidBusy, setBidBusy] = useState(false);
   const prevFeedbackAt = useRef<number>(0);
   const lastUrgentTick = useRef<number>(-1);
   const lastRoundIntroRef = useRef<number>(-1);
@@ -75,6 +87,8 @@ export function GameArena({
   const qOptionsKey = session.currentQuestion?.options.join('|') ?? '';
   useEffect(() => {
     setTextAnswer('');
+    setBidAnswerText('');
+    setBidError(null);
     setListChips([]);
     setListDupWarning(null);
     setObjectionSent(false);
@@ -223,6 +237,35 @@ export function GameArena({
     }
   };
 
+  const handleBidAction = async (action: string, payload: Record<string, unknown> = {}) => {
+    if (bidBusy) return;
+    setBidBusy(true);
+    setBidError(null);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/sessions/${session.code}/bid`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ action, payload }),
+      });
+      const json = (await res.json()) as { session?: GameSessionView; error?: string };
+      if (json.session) setSession(json.session);
+      if (!res.ok && json.error) {
+        setBidError(json.error);
+      }
+      if (res.ok && action === 'bid_record_answer') {
+        setBidAnswerText('');
+      }
+    } catch {
+      setBidError('تعذر تنفيذ إجراء المزايدة');
+    } finally {
+      setBidBusy(false);
+    }
+  };
+
   const handleAddListChip = () => {
     const trimmed = textAnswer.trim();
     if (!trimmed) return;
@@ -314,6 +357,14 @@ export function GameArena({
               <Play className="w-5 h-5 fill-current" />
               <span>أنا مستعد — ابدأ الجولة الأولى</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setShowVsQr((v) => !v)}
+              className="py-4 px-5 rounded-2xl bg-[#132666] hover:bg-[#1B317A] border border-emerald-400/40 text-emerald-200 font-bold text-sm inline-flex items-center gap-2"
+            >
+              <QrCode className="w-4 h-4" />
+              <span>{showVsQr ? 'إخفاء QR الجوال' : 'تحكم الأستاذ من الجوال (QR)'}</span>
+            </button>
             {onOpenHostPanel && (
               <button
                 type="button"
@@ -326,11 +377,46 @@ export function GameArena({
             <button
               type="button"
               onClick={onExit}
-              className="py-4 px-5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-bold text-sm"
+              className="py-4 px-5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-bold text-sm inline-flex items-center gap-1.5"
             >
-              خروج
+              <ArrowRight className="w-4 h-4" />
+              <span>عودة خطوة</span>
             </button>
           </div>
+
+          {showVsQr && (
+            <div className="rounded-2xl bg-[#09143A] border border-emerald-400/35 p-5 flex flex-col sm:flex-row items-center justify-center gap-6 text-right">
+              <SessionQrBadge
+                code={session.code}
+                url={`${typeof window !== 'undefined' ? window.location.origin : ''}/?mode=host&code=${session.code}`}
+                size="md"
+              />
+              <div className="space-y-2 max-w-sm">
+                <div className="inline-flex items-center gap-1.5 text-emerald-300 font-black text-sm">
+                  <Smartphone className="w-4 h-4" />
+                  <span>امسح الرمز بكاميرا هاتفك قبل البدء</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  يفتح هذا الرمز لوحة تحكم الأستاذ مباشرة على جوالك (بدء الجولة، الإجابة الصحيحة، المؤقت، وتعديل النقاط) بينما تبقى هذه الشاشة للعرض.
+                </p>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = `${window.location.origin}/?mode=host&code=${session.code}`;
+                      navigator.clipboard?.writeText(url).catch(() => {});
+                      setCopiedVsQr(true);
+                      setTimeout(() => setCopiedVsQr(false), 2000);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    {copiedVsQr ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedVsQr ? 'تم نسخ رابط الجوال!' : 'نسخ رابط تحكم الجوال'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -380,6 +466,15 @@ export function GameArena({
                 لوحة المشرف
               </button>
             )}
+            <button
+              type="button"
+              onClick={onExit}
+              aria-label="العودة خطوة للخلف"
+              className="h-9 px-3 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-white/10 text-slate-200 font-bold inline-flex items-center gap-1 whitespace-nowrap"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">عودة</span>
+            </button>
             <button
               type="button"
               onClick={() => setConfirmEndOpen(true)}
@@ -471,7 +566,9 @@ export function GameArena({
                 00:{String(session.timerRemainingSec).padStart(2, '0')}
               </div>
               <div className="text-[11px] font-bold mt-1 text-slate-300">
-                {session.memoryPhase === 'memorize'
+                {session.bidState?.phase === 'bidding'
+                  ? 'مرحلة المزايدة (الوقت متوقف)'
+                  : session.memoryPhase === 'memorize'
                   ? `احفظ (${session.memoryRemainingSec}ث)`
                   : isSprintRound && session.timerRunning
                   ? 'وقت متواصل للأسئلة'
@@ -915,6 +1012,176 @@ export function GameArena({
                   </div>
                 )}
 
+                {/* Bid Challenge (مين يزوّد) Interactive Playfield */}
+                {q.roundType === 'bid_challenge' && session.bidState && (
+                  <div className="rounded-2xl bg-[#09143A] border border-amber-400/35 p-4 sm:p-5 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-bold text-amber-300">
+                          {session.bidState.phase === 'bidding'
+                            ? 'المرحلة ١: المزايدة على العدد'
+                            : session.bidState.phase === 'executing'
+                            ? 'المرحلة ٢: تنفيذ التحدي خلال 30 ثانية'
+                            : 'المرحلة ٣: حسم التحدي'}
+                        </div>
+                        <div className="text-sm font-black text-white mt-0.5">
+                          المزايد الحالي:{' '}
+                          <span style={{ color: session.teams[session.bidState.bidderTeamIndex]?.color || '#38BDF8' }}>
+                            {session.teams[session.bidState.bidderTeamIndex]?.name}
+                          </span>{' '}
+                          · الالتزام:{' '}
+                          <span className="text-amber-300 font-mono text-lg">{session.bidState.currentBid}</span>{' '}
+                          (الحد الأقصى {session.bidState.maxPossible})
+                        </div>
+                      </div>
+                      <div className="px-3.5 py-2 rounded-xl bg-[#101E52] border border-sky-400/30 text-sm font-black tabular-nums text-sky-300">
+                        {session.bidState.acceptedAnswers.length} / {session.bidState.currentBid} إجابة فريدة
+                      </div>
+                    </div>
+
+                    {session.bidState.phase === 'bidding' ? (
+                      <div className="space-y-3">
+                        <div className="text-xs text-slate-300">
+                          الدور على{' '}
+                          <strong className="text-white">
+                            {session.teams[session.bidState.turnTeamIndex]?.name}
+                          </strong>{' '}
+                          لرفع العدد أو تحدي{' '}
+                          <strong className="text-amber-300">
+                            {session.teams[session.bidState.bidderTeamIndex]?.name}
+                          </strong>{' '}
+                          ليبدأ عداد الـ30 ثانية:
+                        </div>
+                        <div className="flex flex-wrap gap-2.5">
+                          <button
+                            type="button"
+                            disabled={bidBusy || session.bidState.currentBid + 1 > session.bidState.maxPossible}
+                            onClick={() =>
+                              handleBidAction('bid_raise', {
+                                teamIndex: session.bidState!.turnTeamIndex,
+                                increment: 1,
+                              })
+                            }
+                            className="px-5 py-3 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-black text-sm disabled:opacity-45"
+                          >
+                            +1 زايد (إلى {session.bidState.currentBid + 1})
+                          </button>
+                          <button
+                            type="button"
+                            disabled={bidBusy || session.bidState.currentBid + 2 > session.bidState.maxPossible}
+                            onClick={() =>
+                              handleBidAction('bid_raise', {
+                                teamIndex: session.bidState!.turnTeamIndex,
+                                increment: 2,
+                              })
+                            }
+                            className="px-5 py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-black text-sm disabled:opacity-45"
+                          >
+                            +2 زايد (إلى {session.bidState.currentBid + 2})
+                          </button>
+                          <button
+                            type="button"
+                            disabled={bidBusy}
+                            onClick={() => handleBidAction('bid_challenge', {})}
+                            className="px-6 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-sm"
+                          >
+                            {session.teams.length > 1
+                              ? `تحدّاه عند (${session.bidState.currentBid}) — ابدأ الـ30ث`
+                              : `ابدأ التنفيذ (${session.bidState.currentBid}) — 30ث`}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="w-full h-2.5 rounded-full bg-slate-800 overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-400 transition-all duration-300"
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.round(
+                                  (session.bidState.acceptedAnswers.length / Math.max(1, session.bidState.currentBid)) *
+                                    100
+                                )
+                              )}%`,
+                            }}
+                          />
+                        </div>
+
+                        {session.bidState.acceptedAnswers.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {session.bidState.acceptedAnswers.map((ans, idx) => (
+                              <span
+                                key={idx}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-xs font-bold text-emerald-100"
+                              >
+                                {idx + 1}. {ans}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {(bidError || session.bidState.lastDuplicateWarning) && (
+                          <p className="text-xs font-bold text-amber-300">
+                            {bidError || session.bidState.lastDuplicateWarning}
+                          </p>
+                        )}
+
+                        {!session.answerRevealed && (
+                          <div className="space-y-2">
+                            {session.timerRemainingSec > 0 && (
+                              <form
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  if (bidAnswerText.trim()) {
+                                    handleBidAction('bid_record_answer', {
+                                      answerText: bidAnswerText.trim(),
+                                      hostConfirmed: false,
+                                    });
+                                  }
+                                }}
+                                className="flex flex-col sm:flex-row gap-2"
+                              >
+                                <label htmlFor="bid-answer-input" className="sr-only">
+                                  أضف إجابة فريدة لتحدي مين يزوّد
+                                </label>
+                                <input
+                                  id="bid-answer-input"
+                                  type="text"
+                                  autoFocus
+                                  value={bidAnswerText}
+                                  onChange={(e) => {
+                                    setBidAnswerText(e.target.value);
+                                    setBidError(null);
+                                  }}
+                                  placeholder="اكتب إجابة واحدة فريدة واضغط Enter..."
+                                  className="flex-1 rounded-xl bg-[#101E52] border border-sky-400/40 focus:border-sky-300 px-4 py-3 text-sm text-white outline-none"
+                                />
+                                <button
+                                  type="submit"
+                                  disabled={bidBusy || !bidAnswerText.trim()}
+                                  className="px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm disabled:opacity-50"
+                                >
+                                  تسجيل الإجابة
+                                </button>
+                              </form>
+                            )}
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => sendHostAction('bid_complete')}
+                                className="px-4 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/40 text-amber-200 text-xs font-black"
+                              >
+                                {session.timerRemainingSec <= 0 ? 'حسم نتيجة التحدي وإعلان النقاط' : 'إنهاء وحسم التحدي الآن'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Text Answer Input */}
                 {((q.roundType === 'rapid_fire' && !useVerbalControls) ||
                   q.roundType === 'fill_blank' ||
@@ -1132,9 +1399,16 @@ export function GameArena({
               <button
                 type="button"
                 onClick={onExit}
+                className="w-full py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold"
+              >
+                العودة خطوة للخلف
+              </button>
+              <button
+                type="button"
+                onClick={onGoHome || onExit}
                 className="w-full py-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-bold"
               >
-                الخروج للرئيسية
+                الشاشة الرئيسية
               </button>
             </div>
           </div>
@@ -1188,7 +1462,7 @@ export function GameArena({
               </button>
             )}
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 data-start="true"
@@ -1200,10 +1474,19 @@ export function GameArena({
               <button
                 type="button"
                 onClick={onExit}
-                className="px-5 py-3.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold"
+                className="px-4 py-3.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold"
               >
-                الرئيسية
+                عودة خطوة
               </button>
+              {onGoHome && (
+                <button
+                  type="button"
+                  onClick={onGoHome}
+                  className="px-4 py-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold"
+                >
+                  الرئيسية
+                </button>
+              )}
             </div>
           </div>
         </div>

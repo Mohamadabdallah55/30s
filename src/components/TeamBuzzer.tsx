@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Bell, CheckCircle2, Lock, Send, Trophy, Users, XCircle } from 'lucide-react';
 import { ROUND_RULES } from '../shared/gameRules';
 import type { GameSessionView } from '../shared/types';
-import { apiFetch, useSessionSocket } from '../utils/api';
+import { apiFetch, getAuthToken, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
 
 interface TeamBuzzerProps {
@@ -75,6 +75,34 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
     }
   };
 
+  const handlePhoneBidAction = async (action: string, payload: Record<string, unknown> = {}) => {
+    if (!session || submitting) return;
+    setSubmitting(true);
+    setStatusError(null);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/sessions/${code}/bid`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ action, payload }),
+      });
+      const json = (await res.json()) as { session?: GameSessionView; error?: string };
+      if (json.session) setSession(json.session);
+      if (!res.ok) {
+        setStatusError(json.error || 'تعذر تنفيذ المزايدة');
+      } else if (action === 'bid_record_answer') {
+        setTextAnswer('');
+      }
+    } catch {
+      setStatusError('تعذر الاتصال بالجلسة');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   if (!session) {
     return (
       <div className="min-h-screen bg-[#09143A] text-slate-50 flex items-center justify-center p-6">
@@ -136,7 +164,7 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
           onClick={onExit}
           className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold"
         >
-          خروج
+          عودة خطوة
         </button>
       </header>
 
@@ -210,61 +238,141 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
               </div>
             )}
 
-            {/* Giant Tactile Buzzer Button */}
-            <button
-              type="button"
-              disabled={!canBuzz || buzzing}
-              onClick={handleBuzz}
-              data-testid="phone-buzzer-btn"
-              style={
-                canBuzz
-                  ? { backgroundColor: myTeam.color, color: '#09143A' }
-                  : undefined
-              }
-              className={`w-full min-h-[180px] rounded-3xl font-black text-2xl flex flex-col items-center justify-center gap-3 transition-transform active:scale-[0.97] border-2 ${
-                isMyBuzz
-                  ? 'bg-emerald-500/25 border-emerald-400 text-emerald-100'
-                  : isFailedLocked
-                  ? 'bg-rose-500/15 border-rose-400/40 text-rose-200'
-                  : isOtherBuzz
-                  ? 'bg-slate-800/80 border-slate-600 text-slate-300'
-                  : canBuzz
-                  ? 'border-white/30 shadow-xl'
-                  : 'bg-[#09143A] border-white/10 text-slate-500'
-              }`}
-            >
-              {isMyBuzz ? (
-                <>
-                  <CheckCircle2 className="w-12 h-12 text-emerald-300" />
-                  <span>الجرس معكم الآن!</span>
-                  <span className="text-xs font-bold text-emerald-200">تحدث بالإجابة أو أرسلها أدناه</span>
-                </>
-              ) : isFailedLocked ? (
-                <>
-                  <XCircle className="w-12 h-12 text-rose-300" />
-                  <span className="text-lg">تم إغلاق فرصتك في هذا السؤال</span>
-                  <span className="text-xs font-medium text-rose-200">انتقلت الفرصة للفريق المنافس</span>
-                </>
-              ) : isOtherBuzz ? (
-                <>
-                  <Lock className="w-10 h-10 text-amber-300" />
-                  <span className="text-lg">تم قفل الجرس على فريق آخر</span>
-                  <span className="text-xs font-bold text-amber-200">المتحدث: {otherTeamName}</span>
-                </>
-              ) : (
-                <>
-                  <Bell className="w-12 h-12" />
-                  <span>{canBuzz ? 'اضغط الجرس الآن!' : 'الجرس غير متاح حالياً'}</span>
-                </>
-              )}
-            </button>
+            {/* Bid Challenge (مين يزوّد) Phone Controls OR Giant Tactile Buzzer */}
+            {q?.roundType === 'bid_challenge' && session.bidState && !session.answerRevealed ? (
+              <div className="rounded-2xl bg-[#09143A] border border-amber-400/35 p-4 space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-amber-300">
+                    {session.bidState.phase === 'bidding' ? 'المزايدة الجارية' : 'تحدي الـ30 ثانية'}
+                  </span>
+                  <span className="font-black text-sky-300 tabular-nums">
+                    {session.bidState.phase === 'bidding'
+                      ? `الالتزام: ${session.bidState.currentBid}`
+                      : `${session.bidState.acceptedAnswers.length} / ${session.bidState.currentBid}`}
+                  </span>
+                </div>
+
+                {session.bidState.phase === 'bidding' ? (
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-300">
+                      المزايد الحالي: {session.teams[session.bidState.bidderTeamIndex]?.name}
+                    </div>
+                    {(session.bidState.turnTeamIndex === teamIndex || session.teams.length === 1) ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={submitting || session.bidState.currentBid + 1 > session.bidState.maxPossible}
+                          onClick={() => handlePhoneBidAction('bid_raise', { teamIndex, increment: 1 })}
+                          className="py-3 rounded-xl bg-sky-400 text-slate-950 font-black text-sm disabled:opacity-45"
+                        >
+                          +1 زايد
+                        </button>
+                        <button
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => handlePhoneBidAction('bid_challenge', {})}
+                          className="py-3 rounded-xl bg-amber-400 text-slate-950 font-black text-sm"
+                        >
+                          تحدّاه!
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-center text-slate-400 py-2">
+                        الدور مع الفريق المنافس...
+                      </div>
+                    )}
+                  </div>
+                ) : session.bidState.bidderTeamIndex === teamIndex && session.timerRemainingSec > 0 ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (textAnswer.trim()) {
+                        handlePhoneBidAction('bid_record_answer', {
+                          answerText: textAnswer.trim(),
+                          hostConfirmed: false,
+                        });
+                      }
+                    }}
+                    className="flex gap-2"
+                  >
+                    <input
+                      type="text"
+                      value={textAnswer}
+                      onChange={(e) => setTextAnswer(e.target.value)}
+                      placeholder="أرسل إجابة فريدة..."
+                      className="flex-1 rounded-xl bg-[#101E52] border border-sky-400/30 px-3 py-2.5 text-sm text-white outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={submitting || !textAnswer.trim()}
+                      aria-label="إرسال إجابة المزايدة"
+                      className="px-4 py-2.5 rounded-xl bg-emerald-500 text-slate-950 font-black"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
+                  </form>
+                ) : (
+                  <div className="text-xs text-center text-slate-300 py-2">
+                    المزايد الآن: {session.teams[session.bidState.bidderTeamIndex]?.name}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={!canBuzz || buzzing}
+                onClick={handleBuzz}
+                data-testid="phone-buzzer-btn"
+                style={
+                  canBuzz
+                    ? { backgroundColor: myTeam.color, color: '#09143A' }
+                    : undefined
+                }
+                className={`w-full min-h-[180px] rounded-3xl font-black text-2xl flex flex-col items-center justify-center gap-3 transition-transform active:scale-[0.97] border-2 ${
+                  isMyBuzz
+                    ? 'bg-emerald-500/25 border-emerald-400 text-emerald-100'
+                    : isFailedLocked
+                    ? 'bg-rose-500/15 border-rose-400/40 text-rose-200'
+                    : isOtherBuzz
+                    ? 'bg-slate-800/80 border-slate-600 text-slate-300'
+                    : canBuzz
+                    ? 'border-white/30 shadow-xl'
+                    : 'bg-[#09143A] border-white/10 text-slate-500'
+                }`}
+              >
+                {isMyBuzz ? (
+                  <>
+                    <CheckCircle2 className="w-12 h-12 text-emerald-300" />
+                    <span>الجرس معكم الآن!</span>
+                    <span className="text-xs font-bold text-emerald-200">تحدث بالإجابة أو أرسلها أدناه</span>
+                  </>
+                ) : isFailedLocked ? (
+                  <>
+                    <XCircle className="w-12 h-12 text-rose-300" />
+                    <span className="text-lg">تم إغلاق فرصتك في هذا السؤال</span>
+                    <span className="text-xs font-medium text-rose-200">انتقلت الفرصة للفريق المنافس</span>
+                  </>
+                ) : isOtherBuzz ? (
+                  <>
+                    <Lock className="w-10 h-10 text-amber-300" />
+                    <span className="text-lg">تم قفل الجرس على فريق آخر</span>
+                    <span className="text-xs font-bold text-amber-200">المتحدث: {otherTeamName}</span>
+                  </>
+                ) : (
+                  <>
+                    <Bell className="w-12 h-12" />
+                    <span>{canBuzz ? 'اضغط الجرس الآن!' : 'الجرس غير متاح حالياً'}</span>
+                  </>
+                )}
+              </button>
+            )}
 
             {statusError && (
               <p className="text-xs text-rose-300 text-center font-bold">{statusError}</p>
             )}
 
             {/* Quick Phone Answer Controls when team holds the turn */}
-            {canAnswerOnPhone && q && (
+            {canAnswerOnPhone && q && q.roundType !== 'bid_challenge' && (
               <div className="pt-3 border-t border-white/10 space-y-2.5">
                 {q.options.length > 0 &&
                 (q.roundType === 'multiple_choice' || q.roundType === 'true_false' || q.roundType === 'odd_one_out') ? (

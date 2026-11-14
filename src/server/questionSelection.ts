@@ -19,6 +19,7 @@ export interface SelectionRequest {
   targetDifficultyLevel?: DifficultyLevel;
   adaptiveDifficulty?: boolean;
   category?: string;
+  categories?: string[];
   participantProfileIds: string[];
   sessionId?: string;
   recentSessionPrompts?: string[];
@@ -98,8 +99,19 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
 
 const TIMED_SPRINT_ROUNDS = new Set<RoundType>(['rapid_fire', 'true_false', 'buzzer']);
 
+function normalizeCategoryFilter(category?: string, categories?: string[]): string[] | null {
+  const cleaned = (categories ?? [])
+    .map((c) => c.trim())
+    .filter((c) => c && c !== 'الكل');
+  if (cleaned.length > 0) return Array.from(new Set(cleaned));
+  if (category && category.trim() && category.trim() !== 'الكل') {
+    return [category.trim()];
+  }
+  return null;
+}
+
 /**
- * Computes real published & unseen question availability per roundType for setup wizard.
+ * Computes real published & unseen question availability per roundType and category for setup wizard.
  */
 export function getBankAvailability(
   db: Database.Database,
@@ -108,12 +120,14 @@ export function getBankAvailability(
     ageGroup: AgeGroup;
     difficulty: Difficulty | 'mixed';
     category?: string;
+    categories?: string[];
     participantProfileIds?: string[];
   }
 ): {
   totalPublishedInFilter: number;
   unseenInFilter: number;
   byRoundType: Record<RoundType, { total: number; unseen: number }>;
+  byCategory: Record<string, { total: number; unseen: number }>;
 } {
   const allPublished = db
     .prepare(`SELECT * FROM questions WHERE bank_id = ? AND status = 'published'`)
@@ -134,13 +148,23 @@ export function getBankAvailability(
     for (const r of rows) exposedSet.add(r.question_id);
   }
 
-  const categoryFilter = params.category && params.category !== 'الكل' ? params.category : null;
-  const matching = allPublished.filter((q) => {
+  const baseMatching = allPublished.filter((q) => {
     if (!isAgeCompatible(q.age_group, params.ageGroup)) return false;
     if (params.difficulty !== 'mixed' && q.difficulty !== params.difficulty) return false;
-    if (categoryFilter && q.category !== categoryFilter) return false;
     return true;
   });
+
+  const byCategory: Record<string, { total: number; unseen: number }> = {};
+  for (const q of baseMatching) {
+    if (!byCategory[q.category]) byCategory[q.category] = { total: 0, unseen: 0 };
+    byCategory[q.category].total += 1;
+    if (!exposedSet.has(q.id)) byCategory[q.category].unseen += 1;
+  }
+
+  const categoryList = normalizeCategoryFilter(params.category, params.categories);
+  const matching = categoryList
+    ? baseMatching.filter((q) => categoryList.includes(q.category))
+    : baseMatching;
 
   const byRoundType = {} as Record<RoundType, { total: number; unseen: number }>;
   for (const rt of ALL_ROUND_TYPES) {
@@ -158,7 +182,7 @@ export function getBankAvailability(
     }
   }
 
-  // Fallback compatibility: golden & buzzer & rapid_fire can draw from compatible Q&A if dedicated slots are scarce
+  // Fallback compatibility: golden & buzzer can draw from compatible Q&A if dedicated slots are scarce
   const compatPool = matching.filter((q) =>
     ['rapid_fire', 'fill_blank', 'multiple_choice', 'buzzer', 'golden'].includes(q.round_type) &&
     Number(q.unsuitable_for_timed || 0) === 0
@@ -175,11 +199,15 @@ export function getBankAvailability(
       unseen: compatPool.filter((q) => !exposedSet.has(q.id)).length,
     };
   }
+  if (byRoundType.bid_challenge.total === 0 && byRoundType.list_multiple.total > 0) {
+    byRoundType.bid_challenge = { ...byRoundType.list_multiple };
+  }
 
   return {
     totalPublishedInFilter: matching.length,
     unseenInFilter: unseenTotal,
     byRoundType,
+    byCategory,
   };
 }
 
@@ -228,14 +256,14 @@ export function selectNextQuestionTx(
     }
     const availableCategories = Array.from(availableCategorySet);
 
-    const categoryFilter = req.category && req.category !== 'الكل' ? req.category : null;
+    const categoryList = normalizeCategoryFilter(req.category, req.categories);
     const disallowUntimed = TIMED_SPRINT_ROUNDS.has(effectiveRoundType);
 
     let candidates = allPublished.filter((q) => {
       if (exposedSet.has(q.id)) return false;
       if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
       if (req.difficulty !== 'mixed' && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
-      if (categoryFilter && q.category !== categoryFilter) return false;
+      if (categoryList && !categoryList.includes(q.category)) return false;
       if (disallowUntimed && Number(q.unsuitable_for_timed || 0) === 1) return false;
       return q.round_type === effectiveRoundType;
     });
@@ -249,20 +277,29 @@ export function selectNextQuestionTx(
         if (exposedSet.has(q.id)) return false;
         if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
         if (req.difficulty !== 'mixed' && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
-        if (categoryFilter && q.category !== categoryFilter) return false;
+        if (categoryList && !categoryList.includes(q.category)) return false;
         if (disallowUntimed && Number(q.unsuitable_for_timed || 0) === 1) return false;
         return fallbackCompatibleTypes.includes(q.round_type);
+      });
+    } else if (candidates.length === 0 && effectiveRoundType === 'bid_challenge') {
+      candidates = allPublished.filter((q) => {
+        if (exposedSet.has(q.id)) return false;
+        if (!isAgeCompatible(q.age_group, req.ageGroup)) return false;
+        if (req.difficulty !== 'mixed' && !req.adaptiveDifficulty && q.difficulty !== req.difficulty) return false;
+        if (categoryList && !categoryList.includes(q.category)) return false;
+        return q.round_type === 'list_multiple';
       });
     }
 
     if (candidates.length === 0) {
+      const catLabel = categoryList ? categoryList.join('، ') : null;
       return {
         question: null,
         exhausted: true,
         remainingInFilter: 0,
         availableCategories,
-        messageAr: categoryFilter
-          ? `انتهت الأسئلة غير المعروضة في فئة «${categoryFilter}» لهذا الحساب. اختر فئة أخرى أو أعد تدوير الأسئلة بموافقتك.`
+        messageAr: catLabel
+          ? `انتهت الأسئلة غير المعروضة في فئة «${catLabel}» لهذا الحساب. اختر فئة أخرى أو أعد تدوير الأسئلة بموافقتك.`
           : 'انتهت جميع الأسئلة غير المعروضة في هذا البنك لهذه الفئة العمرية/المستوى. يمكنك اختيار بنك آخر أو الموافقة على إعادة الدورة.',
       };
     }

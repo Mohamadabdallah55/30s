@@ -201,6 +201,12 @@ export function createDatabase(dbPath?: string): Database.Database {
       UNIQUE(session_id, team_index)
     );
 
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS lesson_question_batches (
       id TEXT PRIMARY KEY,
       lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
@@ -208,14 +214,22 @@ export function createDatabase(dbPath?: string): Database.Database {
       pipeline_stage TEXT NOT NULL,
       stage_logs_json TEXT NOT NULL DEFAULT '[]',
       requested_count INTEGER NOT NULL DEFAULT 10,
+      received_count INTEGER NOT NULL DEFAULT 0,
+      accepted_count INTEGER NOT NULL DEFAULT 0,
       generated_count INTEGER NOT NULL DEFAULT 0,
       verified_count INTEGER NOT NULL DEFAULT 0,
       rejected_count INTEGER NOT NULL DEFAULT 0,
       plan_json TEXT NOT NULL DEFAULT '[]',
       completed_batches INTEGER NOT NULL DEFAULT 0,
+      failed_batches INTEGER NOT NULL DEFAULT 0,
       total_batches INTEGER NOT NULL DEFAULT 0,
       current_batch_size INTEGER NOT NULL DEFAULT 8,
       failed_batch_index INTEGER,
+      last_batch_status TEXT NOT NULL DEFAULT 'idle',
+      error_category TEXT,
+      model_used TEXT NOT NULL DEFAULT 'gemini-4-hydrogen',
+      started_at TEXT,
+      ended_at TEXT,
       status_message_ar TEXT DEFAULT '',
       diagnostic_logs_json TEXT NOT NULL DEFAULT '[]',
       insufficient_content_note TEXT DEFAULT '',
@@ -249,10 +263,18 @@ export function createDatabase(dbPath?: string): Database.Database {
   ensureColumn('questions', 'difficulty_level', 'INTEGER NOT NULL DEFAULT 3');
   ensureColumn('questions', 'unsuitable_for_timed', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('lesson_question_batches', 'plan_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('lesson_question_batches', 'received_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('lesson_question_batches', 'accepted_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('lesson_question_batches', 'completed_batches', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('lesson_question_batches', 'failed_batches', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('lesson_question_batches', 'total_batches', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('lesson_question_batches', 'current_batch_size', 'INTEGER NOT NULL DEFAULT 8');
   ensureColumn('lesson_question_batches', 'failed_batch_index', 'INTEGER');
+  ensureColumn('lesson_question_batches', 'last_batch_status', "TEXT NOT NULL DEFAULT 'idle'");
+  ensureColumn('lesson_question_batches', 'error_category', 'TEXT');
+  ensureColumn('lesson_question_batches', 'model_used', "TEXT NOT NULL DEFAULT 'gemini-4-hydrogen'");
+  ensureColumn('lesson_question_batches', 'started_at', 'TEXT');
+  ensureColumn('lesson_question_batches', 'ended_at', 'TEXT');
   ensureColumn('lesson_question_batches', 'status_message_ar', "TEXT DEFAULT ''");
   ensureColumn('lesson_question_batches', 'diagnostic_logs_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('lesson_question_batches', 'insufficient_content_note', "TEXT DEFAULT ''");

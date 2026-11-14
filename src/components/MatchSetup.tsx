@@ -60,7 +60,7 @@ export function MatchSetup({
   const [categories, setCategories] = useState<string[]>([]);
   const [activePresetId, setActivePresetId] = useState<string>(initialLessonId ? 'lesson' : 'classic');
   const [bankId, setBankId] = useState(initialBankId || 'bank-general-mosque');
-  const [category, setCategory] = useState('الكل');
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [ageGroup, setAgeGroup] = useState<AgeGroup>(user?.ageGroup || 'family');
   const [difficulty, setDifficulty] = useState<Difficulty | 'mixed'>('mixed');
   const [difficultyLevel, setDifficultyLevel] = useState<DifficultyLevel>(3);
@@ -89,6 +89,7 @@ export function MatchSetup({
     totalPublishedInFilter: number;
     unseenInFilter: number;
     byRoundType: Record<string, { total: number; unseen: number }>;
+    byCategory?: Record<string, { total: number; unseen: number }>;
   } | null>(null);
 
   const [creating, setCreating] = useState(false);
@@ -109,16 +110,20 @@ export function MatchSetup({
       bankId,
       ageGroup: String(ageGroup),
       difficulty: String(difficulty),
-      category,
+      category: selectedCategories.length === 1 ? selectedCategories[0] : 'الكل',
     });
+    if (selectedCategories.length > 0) {
+      qs.set('categories', selectedCategories.join(','));
+    }
     apiFetch<{
       totalPublishedInFilter: number;
       unseenInFilter: number;
       byRoundType: Record<string, { total: number; unseen: number }>;
+      byCategory?: Record<string, { total: number; unseen: number }>;
     }>(`/api/questions/availability?${qs.toString()}`)
       .then((res) => setAvailability(res))
       .catch(() => {});
-  }, [bankId, ageGroup, difficulty, category]);
+  }, [bankId, ageGroup, difficulty, selectedCategories]);
 
   const applyPreset = (preset: MatchPreset) => {
     setActivePresetId(preset.id);
@@ -211,7 +216,8 @@ export function MatchSetup({
           lessonId: initialLessonId ?? null,
           ageGroup,
           difficulty,
-          category,
+          category: selectedCategories.length === 1 ? selectedCategories[0] : 'الكل',
+          categories: selectedCategories,
           teams,
           roundTypes: selectedRounds,
           roundOverrides,
@@ -470,7 +476,7 @@ export function MatchSetup({
                 <span>تفعيل التدرّج التكيفي التلقائي حسب دقة إجابات الفرق</span>
               </label>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-3">
                 <div>
                   <label htmlFor="setup-bank" className="block text-xs font-bold text-slate-300 mb-1">
                     5. مصدر الأسئلة
@@ -478,7 +484,10 @@ export function MatchSetup({
                   <select
                     id="setup-bank"
                     value={bankId}
-                    onChange={(e) => setBankId(e.target.value)}
+                    onChange={(e) => {
+                      setBankId(e.target.value);
+                      setSelectedCategories([]);
+                    }}
                     className="w-full rounded-xl bg-[#09143A] border border-slate-600 px-3 py-2.5 text-sm text-white outline-none"
                   >
                     {banks.map((b) => (
@@ -489,22 +498,61 @@ export function MatchSetup({
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="setup-cat" className="block text-xs font-bold text-slate-300 mb-1">
-                    التصنيف
-                  </label>
-                  <select
-                    id="setup-cat"
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    className="w-full rounded-xl bg-[#09143A] border border-slate-600 px-3 py-2.5 text-sm text-white outline-none"
-                  >
-                    <option value="الكل">جميع الفئات</option>
-                    {categories.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-slate-300">
+                      حزم الفئات المتاحة (مجانية — اختر واحدة أو أكثر)
+                    </span>
+                    {selectedCategories.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCategories([])}
+                        className="text-[11px] font-bold text-sky-300 hover:text-sky-200"
+                      >
+                        عرض جميع الفئات
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCategories([])}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                        selectedCategories.length === 0
+                          ? 'bg-sky-400 border-sky-300 text-slate-950'
+                          : 'bg-[#09143A] border-white/10 text-slate-300 hover:border-white/30'
+                      }`}
+                    >
+                      الكل
+                    </button>
+                    {Array.from(new Set([...Object.keys(availability?.byCategory || {}), ...categories])).map((c) => {
+                      const catStats = availability?.byCategory?.[c];
+                      const active = selectedCategories.includes(c);
+                      const count = catStats?.total;
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() =>
+                            setSelectedCategories((prev) =>
+                              prev.includes(c) ? prev.filter((item) => item !== c) : [...prev, c]
+                            )
+                          }
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border inline-flex items-center gap-1.5 transition-colors ${
+                            active
+                              ? 'bg-sky-500/25 border-sky-400 text-white'
+                              : count === 0
+                              ? 'bg-[#09143A]/60 border-white/5 text-slate-500'
+                              : 'bg-[#09143A] border-white/10 text-slate-300 hover:border-white/30'
+                          }`}
+                        >
+                          <span>{c}</span>
+                          {typeof count === 'number' && (
+                            <span className="text-[10px] font-mono tabular-nums text-sky-300">({count})</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -519,19 +567,19 @@ export function MatchSetup({
             </div>
           </div>
 
-          {/* Steps 6 & 7: 11 Round Types with real counts + Timer & Summary */}
+          {/* Steps 6 & 7: 12 Round Types with real counts + Timer & Summary */}
           <div className="lg:col-span-7 rounded-2xl bg-[#101E52] border border-sky-400/20 p-5 flex flex-col justify-between space-y-5">
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-base font-extrabold text-white">
-                  6. اختر الجولات ({selectedRounds.length} من 11 نوعاً)
+                  6. اختر الجولات ({selectedRounds.length} من {ALL_ROUND_TYPES.length} نوعاً)
                 </h2>
                 <button
                   type="button"
                   onClick={() => setSelectedRounds(ALL_ROUND_TYPES)}
                   className="text-xs text-sky-300 hover:text-sky-200 font-bold"
                 >
-                  تحديد جميع الـ11 جولة
+                  تحديد جميع الـ{ALL_ROUND_TYPES.length} جولة
                 </button>
               </div>
 

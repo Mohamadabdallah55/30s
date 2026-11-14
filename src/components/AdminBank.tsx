@@ -157,7 +157,7 @@ export function AdminBank({ user, onBack, onOpenAuth }: AdminBankProps) {
               className="px-4 py-2.5 rounded-xl bg-[#132666] hover:bg-[#1B317A] border border-white/10 text-xs font-bold inline-flex items-center gap-1.5"
             >
               <ArrowRight className="w-4 h-4" />
-              <span>الرئيسية</span>
+              <span>عودة خطوة</span>
             </button>
             <h1 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
               <Database className="w-6 h-6 text-sky-400" />
