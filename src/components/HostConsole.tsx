@@ -42,6 +42,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [confirmEndOpen, setConfirmEndOpen] = useState(false);
   const [bidAnswerInput, setBidAnswerInput] = useState('');
+  const [extraListItem, setExtraListItem] = useState('');
   const [matchedItems, setMatchedItems] = useState(1);
   const actionInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -78,7 +79,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
     }
   };
 
-  useEffect(() => { setMatchedItems(1); }, [session?.currentQuestion?.id]);
+  useEffect(() => { setMatchedItems(1); setExtraListItem(''); }, [session?.currentQuestion?.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -508,8 +509,16 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
                 {inPlay && session.settings.showMode && q.roundType === 'list_multiple' && (
                   <div className="show-host__items">
                     <strong>القطع المقبولة {session.listProgress?.accepted ?? 0}/{session.listProgress?.required ?? 3}</strong>
-                    <div>{secret.acceptableAnswers.map((item) => <button type="button" key={item} aria-pressed={secret.acceptedItems?.includes(item) ?? false}
+                    <div>{[...new Set([...secret.acceptableAnswers, ...(secret.acceptedItems ?? [])])].map((item) => <button type="button" key={item} aria-pressed={secret.acceptedItems?.includes(item) ?? false}
                       disabled={busy || session.answerRevealed} onClick={() => act('list_toggle_item', { item })}>{item}</button>)}</div>
+                    {secret.acceptsOtherAnswers && !session.answerRevealed && (
+                      <div className="flex items-center gap-2">
+                        <input aria-label="إجابة أخرى اعتمدها المشرف" className="rounded bg-[#09143A] p-2" maxLength={160}
+                          value={extraListItem} onChange={e => setExtraListItem(e.target.value)} />
+                        <button type="button" disabled={busy || !extraListItem.trim()}
+                          onClick={() => { void act('list_toggle_item', { item: extraListItem }); setExtraListItem(''); }}>احتساب إجابة أخرى</button>
+                      </div>
+                    )}
                   </div>
                 )}
                 {canScore && !session.settings.showMode && q.roundType === 'list_multiple' && (

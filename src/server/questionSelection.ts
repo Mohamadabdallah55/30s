@@ -68,6 +68,7 @@ interface QuestionRow {
   status: 'published' | 'needs_review' | 'archived' | 'rejected';
   source_page: number | null;
   source_excerpt: string | null;
+  accepts_other_answers?: number | null;
   confidence_score: number | null;
   created_at: string;
 }
@@ -101,6 +102,7 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
     memoryRequireOrder: row.memory_require_order === 1,
     bidMinimum: row.bid_minimum,
     bidMaximum: row.bid_maximum,
+    acceptsOtherAnswers: row.accepts_other_answers == null ? undefined : row.accepts_other_answers === 1,
     conceptId: row.concept_id,
     oddReason: row.odd_reason ?? '',
     isReligious: row.is_religious === 1,
