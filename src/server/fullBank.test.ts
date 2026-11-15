@@ -5,6 +5,7 @@ import { readBundledBank } from './bundledBankData';
 import { createDatabase } from './db';
 import { seedDatabase } from './seed';
 import { importFullBank, FULL_BANK_ID } from './importFullBank';
+import { approveFootballAuctions } from './approveFootballAuctions';
 import { getBankAvailability, rowToQuestionRecord, selectNextQuestionTx } from './questionSelection';
 import { evaluateAnswerMatch } from '../shared/gameRules';
 import { GameSessionHub } from './wsHub';
@@ -152,6 +153,28 @@ test('football auction add-on preserves host review and plays a vetted open-list
     assert.equal(hub.handleBidAction(code, 'bid_complete', {}, true)?.view.lastFeedback?.pointsDelta, 3);
   } finally {
     hub.stop();
+    db.close();
+  }
+});
+
+test('football pack approval is scoped, recorded and applies only once', () => {
+  const db = createDatabase(':memory:');
+  try {
+    importFullBank(db, readBundledBank('thirty_30s_gap_fill_addon'));
+    importFullBank(db, readBundledBank('football_player_auction'));
+    const status = (id: string) => db.prepare('SELECT status FROM questions WHERE external_id = ?').pluck().get(id);
+    const reviewCount = () => db.prepare("SELECT COUNT(*) FROM questions WHERE status = 'needs_review'").pluck().get();
+    db.prepare("UPDATE questions SET status = 'archived' WHERE external_id = 'FBPA0054'").run();
+    const initialReview = Number(reviewCount());
+    assert.equal(approveFootballAuctions(db), 49);
+    assert.equal(reviewCount(), initialReview - 49);
+    assert.equal(status('FBPA0001'), 'published');
+    assert.equal(status('FBPA0054'), 'archived');
+    assert.equal(db.prepare("SELECT COUNT(*) FROM question_reviews WHERE action = 'approve'").pluck().get(), 49);
+    db.prepare("UPDATE questions SET status = 'needs_review' WHERE external_id = 'FBPA0001'").run();
+    assert.equal(approveFootballAuctions(db), 0);
+    assert.equal(status('FBPA0001'), 'needs_review');
+  } finally {
     db.close();
   }
 });

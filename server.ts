@@ -8,6 +8,7 @@ import { seedDatabase } from './src/server/seed';
 import { importGeminiBank } from './src/server/importGeminiBank';
 import { importFullBank } from './src/server/importFullBank';
 import { readBundledBank } from './src/server/bundledBankData';
+import { approveFootballAuctions } from './src/server/approveFootballAuctions';
 import geminiBank from './data/imports/questions_bank_5000.json';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -31,6 +32,9 @@ for (const [label, dataset] of [
     console.log(`${label}: ${report.published} ready, ${report.needsReview} pending review, ${report.duplicates} existing, ${report.invalid.length} rejected.`);
   }
 }
+
+const approvedFootballAuctions = approveFootballAuctions(db);
+if (approvedFootballAuctions) console.log(`Football player auction add-on: ${approvedFootballAuctions} approved.`);
 
 const { app, hub } = createAppAndHub(db);
 
