@@ -121,6 +121,7 @@ export interface QuestionRecord {
   memoryRequireOrder?: boolean;
   bidMinimum?: number | null;
   bidMaximum?: number | null;
+  acceptsOtherAnswers?: boolean;
   conceptId?: string | null;
   oddReason?: string;
   isReligious: boolean;
@@ -300,6 +301,7 @@ export interface GameSessionView {
     acceptableAnswers: string[];
     requiredCount?: number | null;
     acceptedItems?: string[];
+    acceptsOtherAnswers?: boolean;
     teamKeys?: string[];
     correctIndex?: number | null;
     explanation?: string;

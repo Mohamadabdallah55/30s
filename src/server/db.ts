@@ -402,6 +402,7 @@ export function createDatabase(dbPath?: string): Database.Database {
   ensureColumn('questions', 'memory_require_order', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('questions', 'bid_minimum', 'INTEGER');
   ensureColumn('questions', 'bid_maximum', 'INTEGER');
+  ensureColumn('questions', 'accepts_other_answers', 'INTEGER');
   return db;
 }
 

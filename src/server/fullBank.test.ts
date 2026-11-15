@@ -96,3 +96,21 @@ test('sports and religion add-on extends the existing bank and keeps two-item ch
     assert.equal(hub.getSessionView(code, false)?.hostSecret, undefined);
   } finally { hub.stop(); db.close(); }
 });
+
+test('gap fill supplements the active variety bank and leaves religious draft questions unavailable for play', () => {
+  const db = createDatabase(':memory:');
+  try {
+    importFullBank(db, raw);
+    importFullBank(db, addon);
+    const gap = readBundledBank('thirty_30s_gap_fill_addon');
+    assert.deepEqual(importFullBank(db, gap), { received: 429, published: 385, needsReview: 44, duplicates: 0, invalid: [] });
+    assert.deepEqual(importFullBank(db, gap), { received: 429, published: 0, needsReview: 0, duplicates: 429, invalid: [] });
+    const filter = { bankId: FULL_BANK_ID, ageGroup: 'family' as const, difficulty: 'mixed' as const, exactRounds: true };
+    assert.equal(getBankAvailability(db, filter).totalPublishedInFilter, 2235);
+    assert.equal(getBankAvailability(db, { ...filter, category: 'المسجد والآداب' }).totalPublishedInFilter, 0);
+    const list = db.prepare("SELECT accepts_other_answers FROM questions WHERE external_id = 'GAP00300'").get();
+    assert.deepEqual(list, { accepts_other_answers: 1 });
+  } finally {
+    db.close();
+  }
+});

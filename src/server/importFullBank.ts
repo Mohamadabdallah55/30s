@@ -14,7 +14,7 @@ const rawRow = z.object({
   age_bands: z.array(z.enum(['7-10', '11-13', '14-17', '18+', 'عائلات'])).min(1),
   difficulty: z.literal([1, 2, 3, 4, 5]),
   answer_ar: text.nullable(),
-  status: z.enum(['approved', 'needs_review']),
+  status: z.enum(['approved', 'needs_review', 'draft']),
   host_review_required: z.boolean(),
   source_ref: text.nullish(),
   data: z.record(z.string(), z.unknown()),
@@ -38,6 +38,7 @@ function convert(input: unknown) {
   let orderCriteria = '';
   let bidMinimum: number | null = null;
   let bidMaximum: number | null = null;
+  let acceptsOtherAnswers = false;
   switch (type) {
     case 'multiple_choice':
     case 'odd_one_out':
@@ -60,6 +61,7 @@ function convert(input: unknown) {
       break;
     case 'list_multiple':
     case 'bid_challenge': {
+      acceptsOtherAnswers = d.answers_are_exhaustive === false;
       answers = readList('accepted_answers');
       if (type === 'list_multiple') requiredCount = z.number().int().parse(d.required_count);
       else {
@@ -88,10 +90,11 @@ function convert(input: unknown) {
   const invalid = validateRoundFields({ roundType: type, options, acceptableAnswers: answers, correctIndex, requiredCount,
     clues, memoryItems, orderCriteria, oddReason: explanation });
   if (invalid) throw new Error(invalid);
-  const religious = /^دينيات(?:\s|$)/.test(row.category);
+  const religious = /^دينيات(?:\s|$)/.test(row.category) ||
+    ['القرآن الكريم', 'السيرة النبوية', 'المسجد والآداب', 'فقه وآداب', 'براعم المسجد'].includes(row.category);
   const published = row.status === 'approved' && !row.host_review_required && !religious;
   return { row, type, ages: [...new Set(row.age_bands.map((age) => ages[age]))], answers, options, clues, memoryItems,
-    memoryRequireOrder, correctIndex, requiredCount, viewSeconds, orderCriteria, explanation, published, religious, bidMinimum, bidMaximum };
+    memoryRequireOrder, correctIndex, requiredCount, viewSeconds, orderCriteria, explanation, published, religious, bidMinimum, bidMaximum, acceptsOtherAnswers };
 }
 
 export function importFullBank(db: Database.Database, input: unknown) {
@@ -108,8 +111,8 @@ export function importFullBank(db: Database.Database, input: unknown) {
     const insert = db.prepare(`INSERT INTO questions (
       id, bank_id, external_id, round_type, category, age_group, age_bands_json, concept_id, difficulty, difficulty_level,
       prompt, options_json, acceptable_answers_json, correct_index, explanation, clues_json, order_criteria, memory_items_json,
-      memory_reveal_seconds, memory_require_order, required_count, bid_minimum, bid_maximum, odd_reason, is_religious, status, normalized_hash, source_excerpt
-    ) VALUES (${Array.from({length:28}, () => '?').join(',')})`);
+      memory_reveal_seconds, memory_require_order, required_count, bid_minimum, bid_maximum, odd_reason, is_religious, status, normalized_hash, source_excerpt, accepts_other_answers
+    ) VALUES (${Array.from({length:29}, () => '?').join(',')})`);
     for (const raw of questions) {
       let q: ReturnType<typeof convert>;
       try { q = convert(raw); }
@@ -128,7 +131,7 @@ export function importFullBank(db: Database.Database, input: unknown) {
         q.row.difficulty, q.row.question_ar, JSON.stringify(q.options), JSON.stringify(q.answers), q.correctIndex,
         q.explanation, JSON.stringify(q.clues), q.orderCriteria, JSON.stringify(q.memoryItems), q.viewSeconds,
         Number(q.memoryRequireOrder), q.requiredCount ?? null, q.bidMinimum, q.bidMaximum,
-        q.type === 'odd_one_out' ? q.explanation : '', Number(q.religious), q.published ? 'published' : 'needs_review', hash, q.row.source_ref ?? null);
+        q.type === 'odd_one_out' ? q.explanation : '', Number(q.religious), q.published ? 'published' : 'needs_review', hash, q.row.source_ref ?? null, Number(q.acceptsOtherAnswers));
       ids.add(q.row.id);
       hashes.add(hash);
       if (q.published) report.published++;

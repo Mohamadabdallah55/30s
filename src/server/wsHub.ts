@@ -648,6 +648,7 @@ export class GameSessionHub {
         acceptableAnswers: s.currentQuestion?.acceptableAnswers ?? [],
         requiredCount: s.currentQuestion ? this.listTarget(s.currentQuestion) : undefined,
         acceptedItems: s.acceptedItems,
+        acceptsOtherAnswers: s.currentQuestion?.acceptsOtherAnswers,
         teamKeys: s.teamKeySecret ? s.teams.map((team) => this.teamKey(s, team.index)!) : undefined,
         correctIndex: s.currentQuestion?.correctIndex,
         explanation: s.currentQuestion?.explanation,
@@ -1086,7 +1087,7 @@ export class GameSessionHub {
 
       const hostConfirmed = Boolean(isHost && payload.hostConfirmed !== false);
       const acceptable = s.currentQuestion?.acceptableAnswers ?? [];
-      if (!hostConfirmed && (!match || acceptable.length === 0)) {
+      if ((!hostConfirmed || s.currentQuestion?.acceptsOtherAnswers === false) && (!match || acceptable.length === 0)) {
         return { ok: false, error: 'الإجابة غير موجودة ضمن عناصر التحدي.', view: this.projectView(s, isHost) };
       }
 
@@ -1394,9 +1395,11 @@ export class GameSessionHub {
       case 'list_toggle_item': {
         const q = s.currentQuestion;
         if (!q || q.roundType !== 'list_multiple' || s.answerRevealed || (s.phase !== 'playing' && s.phase !== 'paused')) break;
-        const item = q.acceptableAnswers.find((answer) => answer === payload.item);
-        if (!item) break;
+        const submitted = typeof payload.item === 'string' ? payload.item.trim().slice(0, 160) : '';
         const accepted = s.acceptedItems ?? [];
+        const match = matchDistinctItems(q.acceptableAnswers, [submitted])[0];
+        const item = match ?? (q.acceptsOtherAnswers ? submitted : '');
+        if (!normalizeChallengeItem(item)) break;
         const sameItem = (answer: string) => normalizeChallengeItem(answer) === normalizeChallengeItem(item);
         if (accepted.some(sameItem)) s.acceptedItems = accepted.filter((answer) => !sameItem(answer));
         else if (accepted.length < (this.listTarget(q) ?? 3)) s.acceptedItems = [...accepted, item];
