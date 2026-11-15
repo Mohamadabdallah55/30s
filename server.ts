@@ -24,6 +24,7 @@ for (const [label, dataset] of [
   ['Variety bank', 'thirty_seconds_question_bank'],
   ['Sports & religion add-on', 'thirty_30s_sports_religion_addon'],
   ['Gap fill add-on', 'thirty_30s_gap_fill_addon'],
+  ['Football player auction add-on', 'football_player_auction'],
 ] as const) {
   const report = importFullBank(db, readBundledBank(dataset));
   if (report.published || report.needsReview || report.invalid.length) {

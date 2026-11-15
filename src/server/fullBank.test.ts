@@ -114,3 +114,44 @@ test('gap fill supplements the active variety bank and leaves religious draft qu
     db.close();
   }
 });
+
+test('football auction add-on preserves host review and plays a vetted open-list bid', () => {
+  const db = createDatabase(':memory:');
+  seedDatabase(db);
+  const hub = new GameSessionHub(db);
+  const filter = { bankId: FULL_BANK_ID, ageGroup: 'family' as const, difficulty: 'mixed' as const,
+    category: 'رياضة | كرة القدم', exactRounds: true, participantProfileIds: [] };
+  try {
+    const pack = readBundledBank('football_player_auction');
+    assert.deepEqual(importFullBank(db, pack), { received: 65, published: 15, needsReview: 50, duplicates: 0, invalid: [] });
+    assert.deepEqual(importFullBank(db, pack), { received: 65, published: 0, needsReview: 0, duplicates: 65, invalid: [] });
+    assert.equal(getBankAvailability(db, filter).totalPublishedInFilter, 15);
+    assert.equal(selectNextQuestionTx(db, { ...filter, roundType: 'bid_challenge' }).question, null);
+
+    // Simulate approval of one question, leaving the other auctions pending.
+    db.prepare("UPDATE questions SET status = 'published' WHERE external_id = ?").run('FBPA0001');
+    const { code } = hub.createSession({ ...filter, title: 'مزاد لاعبي كرة القدم', roundTypes: ['bid_challenge'],
+      teams: [], hostProfileId: 'prof-teacher-1', settings: { showMode: true, hostControlled: true } });
+    hub.handleHostAction(code, 'start_match');
+    const live = hub.handleHostAction(code, 'skip_intro')!;
+    const q = hub.getSessionInternal(code)!.currentQuestion!;
+    assert.equal(q.acceptableAnswers.length, 60);
+    assert.equal(live.bidState?.currentBid, 2);
+    assert.equal(live.bidState?.maxPossible, 16);
+    assert.equal(hub.getSessionView(code, false)?.hostSecret, undefined);
+    assert.equal(hub.handleBidAction(code, 'bid_raise', { targetBid: 17 }, true)?.ok, false);
+    assert.equal(hub.handleBidAction(code, 'bid_challenge', {}, true)?.ok, true);
+    const record = (answerText: string, hostConfirmed: boolean) =>
+      hub.handleBidAction(code, 'bid_record_answer', { answerText, hostConfirmed }, true);
+    assert.equal(record(q.acceptableAnswers[0], true)?.ok, true);
+    assert.equal(record(q.acceptableAnswers[0], true)?.ok, false);
+    const extraPlayer = 'ماركوس أكونيا';
+    assert.ok(!q.acceptableAnswers.includes(extraPlayer));
+    assert.equal(record(extraPlayer, false)?.ok, false);
+    assert.equal(record(extraPlayer, true)?.ok, true);
+    assert.equal(hub.handleBidAction(code, 'bid_complete', {}, true)?.view.lastFeedback?.pointsDelta, 3);
+  } finally {
+    hub.stop();
+    db.close();
+  }
+});
