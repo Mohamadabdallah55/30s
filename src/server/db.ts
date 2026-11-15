@@ -403,6 +403,21 @@ export function createDatabase(dbPath?: string): Database.Database {
   ensureColumn('questions', 'bid_minimum', 'INTEGER');
   ensureColumn('questions', 'bid_maximum', 'INTEGER');
   ensureColumn('questions', 'accepts_other_answers', 'INTEGER');
+  // AI Lesson Studio 2.0 columns
+  ensureColumn('lesson_documents', 'knowledge_map_json', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn('lesson_documents', 'capacity_estimate_json', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn('lesson_documents', 'round_suitability_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('lesson_question_batches', 'generation_mode', "TEXT NOT NULL DEFAULT 'suggested'");
+  ensureColumn('lesson_question_batches', 'distribution_mode', "TEXT NOT NULL DEFAULT 'ai'");
+  ensureColumn('lesson_question_batches', 'generation_plan_preview_json', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn('lesson_question_batches', 'stop_reason_ar', "TEXT DEFAULT ''");
+  ensureColumn('lesson_question_batches', 'rejected_details_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('questions', 'learning_objective', "TEXT DEFAULT ''");
+  ensureColumn('questions', 'cognitive_level', "TEXT DEFAULT 'understand'");
+  ensureColumn('questions', 'answer_correctness_reason', "TEXT DEFAULT ''");
+  ensureColumn('questions', 'grading_criterion', "TEXT DEFAULT ''");
+  ensureColumn('questions', 'is_hypothetical_scenario', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('questions', 'rejection_reason', "TEXT DEFAULT ''");
   return db;
 }
 

@@ -6,12 +6,17 @@ import multer from 'multer';
 import type Database from 'better-sqlite3';
 import {
   ALLOWED_AI_MODELS,
+  applyQuestionReplacement,
   cancelLessonPipeline,
   getConfiguredAiModel,
   getLessonBatchSummary,
+  previewQuestionAlternatives,
+  reestimateLessonPotential,
   regenerateRejectedForLesson,
   resumeLessonPipelineAsync,
   setConfiguredAiModel,
+  startLessonAnalyzeAsync,
+  startLessonGenerationFromAnalysis,
   startLessonPipelineAsync,
   subscribeToLessonStream,
 } from './lessonStudio';
@@ -28,7 +33,20 @@ import {
 import { GameSessionHub } from './wsHub';
 import { difficultyToLevel, normalizeAgeGroup } from '../shared/gameRules';
 import { buildQuestionHash, parseCsvQuestions, validateAndDeduplicateImport } from '../shared/questionSchema';
-import type { AgeGroup, Difficulty, DifficultyLevel, RoundConfig, RoundType, SessionSettings } from '../shared/types';
+import type {
+  AgeGroup,
+  Difficulty,
+  DifficultyLevel,
+  LessonDistributionMode,
+  LessonGenerationMode,
+  QuestionAlternativeCandidate,
+  QuestionImprovementAction,
+  RegenerationSettings,
+  RejectedQuestionLog,
+  RoundConfig,
+  RoundType,
+  SessionSettings,
+} from '../shared/types';
 
 function decodeUploadedFilename(rawName: string): string {
   if (!rawName) return 'lesson.pdf';
@@ -401,17 +419,27 @@ export function createAppAndHub(db: Database.Database) {
       return;
     }
 
-    const { prompt, options, acceptableAnswers, explanation, status, difficulty, difficultyLevel, unsuitableForTimed } =
-      req.body as {
-        prompt?: string;
-        options?: string[];
-        acceptableAnswers?: string[];
-        explanation?: string;
-        status?: 'published' | 'needs_review' | 'archived' | 'rejected';
-        difficulty?: Difficulty;
-        difficultyLevel?: DifficultyLevel;
-        unsuitableForTimed?: boolean;
-      };
+    const {
+      prompt,
+      options,
+      acceptableAnswers,
+      explanation,
+      status,
+      difficulty,
+      difficultyLevel,
+      unsuitableForTimed,
+      rejectionReason,
+    } = req.body as {
+      prompt?: string;
+      options?: string[];
+      acceptableAnswers?: string[];
+      explanation?: string;
+      status?: 'published' | 'needs_review' | 'archived' | 'rejected';
+      difficulty?: Difficulty;
+      difficultyLevel?: DifficultyLevel;
+      unsuitableForTimed?: boolean;
+      rejectionReason?: string;
+    };
 
     const nextPrompt = prompt?.trim() || existing.prompt;
     const nextAnswers = acceptableAnswers?.length
@@ -423,11 +451,18 @@ export function createAppAndHub(db: Database.Database) {
     const nextLevel = difficultyLevel ?? existing.difficulty_level ?? difficultyToLevel(nextDifficulty);
     const nextUnsuitable =
       typeof unsuitableForTimed === 'boolean' ? (unsuitableForTimed ? 1 : 0) : Number(existing.unsuitable_for_timed || 0);
+    const nextRejectionReason =
+      typeof rejectionReason === 'string'
+        ? rejectionReason.trim()
+        : nextStatus === 'rejected'
+        ? 'رفضه المعلم أثناء المراجعة'
+        : '';
 
     db.prepare(
       `UPDATE questions
        SET prompt = ?, options_json = ?, acceptable_answers_json = ?, explanation = ?,
-           status = ?, difficulty = ?, difficulty_level = ?, unsuitable_for_timed = ?, normalized_hash = ?
+           status = ?, difficulty = ?, difficulty_level = ?, unsuitable_for_timed = ?,
+           rejection_reason = ?, normalized_hash = ?
        WHERE id = ?`
     ).run(
       nextPrompt,
@@ -438,9 +473,30 @@ export function createAppAndHub(db: Database.Database) {
       nextDifficulty,
       nextLevel,
       nextUnsuitable,
+      nextRejectionReason,
       buildQuestionHash(nextPrompt, nextAnswers),
       questionId
     );
+
+    if (nextStatus === 'rejected') {
+      const batchRow = db
+        .prepare(`SELECT id, rejected_details_json FROM lesson_question_batches WHERE bank_id = ? ORDER BY created_at DESC LIMIT 1`)
+        .get(existing.bank_id) as { id: string; rejected_details_json: string | null } | undefined;
+      if (batchRow) {
+        const list = JSON.parse(batchRow.rejected_details_json || '[]') as RejectedQuestionLog[];
+        list.push({
+          prompt: nextPrompt,
+          roundType: existing.round_type,
+          reason: nextRejectionReason || 'مرفوض من المعلم',
+          sourcePage: existing.source_page ?? undefined,
+          timestamp: new Date().toISOString(),
+        });
+        db.prepare(`UPDATE lesson_question_batches SET rejected_details_json = ? WHERE id = ?`).run(
+          JSON.stringify(list.slice(-100)),
+          batchRow.id
+        );
+      }
+    }
 
     db.prepare(
       `INSERT INTO question_reviews (id, question_id, reviewer_profile_id, action, notes, previous_status, new_status)
@@ -450,7 +506,7 @@ export function createAppAndHub(db: Database.Database) {
       questionId,
       req.user!.id,
       nextStatus === 'published' ? 'approve' : nextStatus === 'rejected' ? 'reject' : 'edit',
-      req.body.notes || 'تحديث من لوحة الإدارة/المعلم',
+      nextRejectionReason || req.body.notes || 'تحديث من لوحة الإدارة/المعلم',
       existing.status,
       nextStatus
     );
@@ -615,6 +671,154 @@ export function createAppAndHub(db: Database.Database) {
     res.json({ lesson: summary, questions });
   });
 
+  app.post(
+    '/api/lessons/analyze',
+    requireRole(['admin', 'teacher']),
+    upload.single('pdf'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const file = req.file;
+        if (!file) {
+          res.status(400).json({ error: 'يرجى رفع ملف PDF للدرس' });
+          return;
+        }
+        const decodedFilename = decodeUploadedFilename(file.originalname);
+        const lessonTitle = String(req.body.lessonTitle || decodedFilename.replace(/\.pdf$/i, '')).trim();
+        const subject = String(req.body.subject || 'التربية الإسلامية').trim();
+        const ageGroup = normalizeAgeGroup(String(req.body.ageGroup || 'teen_14_17'));
+        const difficulty = (req.body.difficulty as Difficulty) || 'medium';
+        const pageRangeHint = req.body.pageRangeHint ? String(req.body.pageRangeHint).trim() : undefined;
+
+        const summary = startLessonAnalyzeAsync(db, {
+          lessonTitle,
+          subject,
+          ageGroup,
+          difficulty,
+          pageRangeHint,
+          createdBy: req.user!.id,
+          pdfBuffer: file.buffer,
+          filename: decodedFilename,
+        });
+
+        res.status(202).json({ lesson: summary, questions: [] });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'تعذر تحليل ملف الدرس';
+        res.status(400).json({ error: message });
+      }
+    }
+  );
+
+  app.post('/api/lessons/:lessonId/reestimate', requireRole(['admin', 'teacher']), (req, res) => {
+    try {
+      const body = req.body as {
+        ageGroup?: AgeGroup;
+        difficulty?: Difficulty;
+        mode?: LessonGenerationMode;
+        distributionMode?: LessonDistributionMode;
+        customCount?: number;
+        selectedRoundTypes?: RoundType[];
+      };
+      const lesson = reestimateLessonPotential(db, req.params.lessonId, body);
+      res.json({ lesson });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر إعادة حساب السعة' });
+    }
+  });
+
+  app.post('/api/lessons/:lessonId/start-generation', requireRole(['admin', 'teacher']), async (req, res) => {
+    try {
+      const body = req.body as {
+        mode?: LessonGenerationMode;
+        distributionMode?: LessonDistributionMode;
+        customCount?: number;
+        selectedRoundTypes?: RoundType[];
+        pageRangeHint?: string;
+      };
+      const lesson = await startLessonGenerationFromAnalysis(db, req.params.lessonId, {
+        ...body,
+        actionType: 'initial',
+        sync: false,
+      });
+      res.status(202).json({ lesson });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر بدء توليد الأسئلة' });
+    }
+  });
+
+  app.post('/api/lessons/:lessonId/complete-missing', requireRole(['admin', 'teacher']), async (req, res) => {
+    try {
+      const body = req.body as { selectedRoundTypes?: RoundType[]; settings?: Partial<RegenerationSettings> };
+      const lesson = await startLessonGenerationFromAnalysis(db, req.params.lessonId, {
+        actionType: 'complete_missing',
+        selectedRoundTypes: body.selectedRoundTypes,
+        settings: body.settings,
+        sync: false,
+      });
+      res.status(202).json({ lesson });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر استكمال الأسئلة الناقصة' });
+    }
+  });
+
+  app.post('/api/lessons/:lessonId/generate-more', requireRole(['admin', 'teacher']), async (req, res) => {
+    try {
+      const body = req.body as {
+        additionalCount?: number;
+        selectedRoundTypes?: RoundType[];
+        prioritizeUndercoveredTopics?: boolean;
+        settings?: Partial<RegenerationSettings>;
+      };
+      const lesson = await startLessonGenerationFromAnalysis(db, req.params.lessonId, {
+        actionType: 'generate_more',
+        additionalCount: body.additionalCount,
+        selectedRoundTypes: body.selectedRoundTypes,
+        prioritizeUndercoveredTopics: body.prioritizeUndercoveredTopics ?? true,
+        settings: body.settings,
+        sync: false,
+      });
+      res.status(202).json({ lesson });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر توليد أسئلة إضافية' });
+    }
+  });
+
+  app.post('/api/lessons/:lessonId/regenerate-selected', requireRole(['admin', 'teacher']), async (req, res) => {
+    try {
+      const body = req.body as {
+        questionIds: string[];
+        improvementAction?: QuestionImprovementAction;
+        targetRoundType?: RoundType;
+        settings?: Partial<RegenerationSettings>;
+      };
+      if (!Array.isArray(body.questionIds) || body.questionIds.length === 0) {
+        res.status(400).json({ error: 'يرجى تحديد سؤال واحد على الأقل لتوليد البدائل.' });
+        return;
+      }
+      const previews = await previewQuestionAlternatives(db, req.params.lessonId, body);
+      res.json({ previews });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر توليد البدائل للسؤال المختار' });
+    }
+  });
+
+  app.post('/api/lessons/:lessonId/apply-replacement', requireRole(['admin', 'teacher']), (req, res) => {
+    try {
+      const body = req.body as {
+        targetQuestionId: string;
+        candidate: QuestionAlternativeCandidate;
+        approveAfterApply?: boolean;
+      };
+      if (!body.targetQuestionId || !body.candidate) {
+        res.status(400).json({ error: 'بيانات الاستبدال غير مكتملة' });
+        return;
+      }
+      const result = applyQuestionReplacement(db, req.params.lessonId, body);
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر استبدال السؤال' });
+    }
+  });
+
   app.post('/api/lessons/:lessonId/approve-all', requireRole(['admin', 'teacher']), (req: AuthedRequest, res) => {
     const summary = getLessonBatchSummary(db, req.params.lessonId);
     if (!summary) {
@@ -624,12 +828,23 @@ export function createAppAndHub(db: Database.Database) {
     const info = db
       .prepare(`UPDATE questions SET status = 'published' WHERE bank_id = ? AND status = 'needs_review'`)
       .run(summary.bankId);
-    res.json({ approvedCount: info.changes });
+    res.json({ approvedCount: info.changes, lesson: getLessonBatchSummary(db, req.params.lessonId) });
   });
 
   app.post('/api/lessons/:lessonId/regenerate-rejected', requireRole(['admin', 'teacher']), async (req, res) => {
     try {
       const count = Number(req.body.count || 3);
+      if (req.body.async) {
+        const lesson = await startLessonGenerationFromAnalysis(db, req.params.lessonId, {
+          actionType: 'regenerate_rejected',
+          additionalCount: count,
+          selectedRoundTypes: req.body.selectedRoundTypes,
+          settings: req.body.settings,
+          sync: false,
+        });
+        res.status(202).json({ lesson });
+        return;
+      }
       const result = await regenerateRejectedForLesson(db, req.params.lessonId, count);
       res.json(result);
     } catch (err) {

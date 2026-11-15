@@ -98,6 +98,119 @@ export interface QuestionBank {
   createdAt: string;
 }
 
+export type PedagogicalCognitiveLevel = 'remember' | 'understand' | 'apply' | 'analyze' | 'infer';
+export type RoundSuitabilityTier = 'excellent' | 'suitable' | 'adaptable' | 'unsuitable';
+export type LessonGenerationMode = 'suggested' | 'max_quality' | 'custom';
+export type LessonDistributionMode = 'ai' | 'manual';
+export type QuestionImprovementAction =
+  | 'easier'
+  | 'harder'
+  | 'more_analytical'
+  | 'shorter'
+  | 'clearer'
+  | 'convert_round'
+  | 'new_idea';
+
+export interface LessonKnowledgeMap {
+  title: string;
+  subject: string;
+  readablePageCount: number;
+  mainConcepts: Array<{ id: string; title: string; summary: string; pages: number[] }>;
+  subConcepts: Array<{ title: string; parentConcept: string; pages: number[] }>;
+  directFacts: Array<{ text: string; page: number }>;
+  causesAndEffects: Array<{ cause: string; effect: string; page: number }>;
+  eventsAndFigures: Array<{ name: string; roleOrEvent: string; timeHint?: string; page: number }>;
+  listsAndClassifications: Array<{ title: string; items: string[]; page: number }>;
+  comparisons: Array<{ title: string; sides: string[]; page: number }>;
+  analyticalPoints: Array<{ point: string; page: number }>;
+  educationalValues: string[];
+  gameablePoints: Array<{ idea: string; suggestedRound: RoundType; page: number }>;
+  suitableAgeGroups: CanonicalAgeGroup[];
+  contentDiversityScore: number;
+  contentDiversityNote: string;
+}
+
+export interface LessonCapacityEstimate {
+  conservativeCount: number;
+  suggestedCount: number;
+  estimatedMaxCount: number;
+  upperBoundDisclaimerAr: string;
+  confidenceScore: number;
+  explanationAr: string;
+  recalculatedForAge: CanonicalAgeGroup;
+  recalculatedForDifficulty: Difficulty;
+}
+
+export interface RoundSuitabilityItem {
+  roundType: RoundType;
+  nameAr: string;
+  descriptionAr: string;
+  tier: RoundSuitabilityTier;
+  tierLabelAr: string;
+  expectedValidCount: number;
+  distinctContribution: number;
+  isMultiplier?: boolean;
+  reusesQuestions?: boolean;
+  suitableDifficulty: Difficulty;
+  cognitiveSkillsAr: string[];
+  reasonAr: string;
+  recommendedSelected: boolean;
+  selectable: boolean;
+}
+
+export interface LessonGenerationPlanPreview {
+  mode: LessonGenerationMode;
+  distributionMode: LessonDistributionMode;
+  targetCount: number;
+  selectedRoundTypes: RoundType[];
+  roundDistribution: Array<{ roundType: RoundType; nameAr: string; count: number; percentage: number }>;
+  difficultyDistribution: Record<Difficulty, number>;
+  cognitiveDistribution: Record<PedagogicalCognitiveLevel, number>;
+  coveredTopics: string[];
+  limitedTopics: string[];
+  estimatedBatches: number;
+  estimatedApiRequests: number;
+  quotaNoteAr: string;
+}
+
+export interface RegenerationSettings {
+  alternativeCount: number;
+  preferredRoundTypes: RoundType[];
+  targetDifficulty?: Difficulty;
+  prioritizeUndercoveredTopics: boolean;
+  applyMode: 'preview' | 'auto';
+}
+
+export interface QuestionAlternativeCandidate {
+  candidateId: string;
+  roundType: RoundType;
+  prompt: string;
+  options: string[];
+  acceptableAnswers: string[];
+  correctIndex?: number | null;
+  explanation: string;
+  clues?: string[];
+  orderCriteria?: string;
+  memoryItems?: string[];
+  oddReason?: string;
+  sourcePage: number;
+  sourceExcerpt: string;
+  learningObjective: string;
+  cognitiveLevel: PedagogicalCognitiveLevel;
+  difficulty: Difficulty;
+  answerCorrectnessReason: string;
+  gradingCriterion: string;
+  isHypotheticalScenario: boolean;
+}
+
+export interface RejectedQuestionLog {
+  prompt: string;
+  roundType: string;
+  reason: string;
+  sourcePage?: number;
+  timestamp: string;
+}
+
 export interface QuestionRecord {
   id: string;
   bankId: string;
@@ -129,6 +242,12 @@ export interface QuestionRecord {
   sourcePage?: number | null;
   sourceExcerpt?: string | null;
   confidenceScore?: number | null;
+  learningObjective?: string;
+  cognitiveLevel?: PedagogicalCognitiveLevel;
+  answerCorrectnessReason?: string;
+  gradingCriterion?: string;
+  isHypotheticalScenario?: boolean;
+  rejectionReason?: string;
   createdAt: string;
 }
 
@@ -319,6 +438,7 @@ export type LessonPipelineStage =
   | 'document_parsing'
   | 'arabic_analysis'
   | 'learning_objectives'
+  | 'analyzed'
   | 'distribution_plan'
   | 'question_generation'
   | 'grounding_verification'
@@ -392,6 +512,20 @@ export interface LessonBatchSummary {
   cacheHit?: boolean;
   elapsedMs?: number;
   errorMessage?: string | null;
+  knowledgeMap?: LessonKnowledgeMap | null;
+  capacityEstimate?: LessonCapacityEstimate | null;
+  roundSuitability?: RoundSuitabilityItem[];
+  generationPlanPreview?: LessonGenerationPlanPreview | null;
+  generationMode?: LessonGenerationMode;
+  distributionMode?: LessonDistributionMode;
+  stopReasonAr?: string | null;
+  topicCoverage?: Array<{ title: string; coveredCount: number; pages: number[] }>;
+  coveragePercentage?: number;
+  topicsCoveredCount?: number;
+  roundDistributionActual?: Record<string, number>;
+  difficultyDistributionActual?: Record<string, number>;
+  cognitiveDistributionActual?: Record<string, number>;
+  rejectedDetails?: RejectedQuestionLog[];
   createdAt: string;
 }
 

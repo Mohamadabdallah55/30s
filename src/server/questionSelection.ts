@@ -70,6 +70,12 @@ interface QuestionRow {
   source_excerpt: string | null;
   accepts_other_answers?: number | null;
   confidence_score: number | null;
+  learning_objective?: string | null;
+  cognitive_level?: string | null;
+  answer_correctness_reason?: string | null;
+  grading_criterion?: string | null;
+  is_hypothetical_scenario?: number | null;
+  rejection_reason?: string | null;
   created_at: string;
 }
 
@@ -79,6 +85,11 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
       ? row.difficulty_level
       : difficultyToLevel(row.difficulty)
   ) as DifficultyLevel;
+  const cogRaw = row.cognitive_level;
+  const cognitiveLevel =
+    cogRaw === 'remember' || cogRaw === 'understand' || cogRaw === 'apply' || cogRaw === 'analyze' || cogRaw === 'infer'
+      ? cogRaw
+      : undefined;
   return {
     id: row.id,
     bankId: row.bank_id,
@@ -110,6 +121,12 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
     sourcePage: row.source_page,
     sourceExcerpt: row.source_excerpt,
     confidenceScore: row.confidence_score,
+    learningObjective: row.learning_objective ?? undefined,
+    cognitiveLevel,
+    answerCorrectnessReason: row.answer_correctness_reason ?? undefined,
+    gradingCriterion: row.grading_criterion ?? undefined,
+    isHypotheticalScenario: Number(row.is_hypothetical_scenario || 0) === 1,
+    rejectionReason: row.rejection_reason ?? undefined,
     createdAt: row.created_at,
   };
 }
