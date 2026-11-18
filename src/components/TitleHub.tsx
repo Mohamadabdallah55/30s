@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDownLeft, ArrowLeft, BookOpen, Database, DoorOpen, Play, RotateCw, Sliders, UserRound, Volume2, VolumeX, Zap } from 'lucide-react';
+import { ArrowDownLeft, ArrowLeft, BookOpen, Database, DoorOpen, Play, RotateCw, Sliders, Swords, UserRound, Volume2, VolumeX, Zap } from 'lucide-react';
 import type { ProfilePublic, RoundType } from '../shared/types';
 import { ALL_ROUND_TYPES, ROUND_RULES } from '../shared/gameRules';
 import { apiFetch } from '../utils/api';
-import { RoundArt, ShowMark, showRounds } from './ShowArt';
+import { NashmiMascot, RoundArt, ShowMark, showRounds } from './ShowArt';
 
 interface ResumableSession {
   code: string;
@@ -19,6 +19,8 @@ interface TitleHubProps {
   onToggleReducedMotion: () => void;
   onStartSetup: (type?: RoundType) => void;
   onQuickPlay: () => Promise<void>;
+  onQuickPlayBot: () => Promise<void>;
+  onOpenBot: () => void;
   onOpenAuth: () => void;
   onOpenProfile: () => void;
   onOpenLessonStudio: () => void;
@@ -34,13 +36,14 @@ const homeRoundNames: Partial<Record<RoundType, string>> = {
 
 export function TitleHub({
   user, soundEnabled, reducedMotion, onToggleSound, onToggleReducedMotion, onStartSetup,
-  onQuickPlay, onOpenAuth, onOpenProfile, onOpenLessonStudio, onOpenAdminBank, onJoinSession,
+  onQuickPlay, onQuickPlayBot, onOpenBot, onOpenAuth, onOpenProfile, onOpenLessonStudio, onOpenAdminBank, onJoinSession,
 }: TitleHubProps) {
   const [resumable, setResumable] = useState<ResumableSession[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [botBusy, setBotBusy] = useState(false);
   const joinDialog = useRef<HTMLDialogElement>(null);
   const isStaff = user?.role === 'admin' || user?.role === 'teacher';
 
@@ -62,7 +65,7 @@ export function TitleHub({
   }
 
   async function quickPlay() {
-    if (busy) return;
+    if (busy || botBusy) return;
     setBusy(true);
     setError('');
     try { await onQuickPlay(); }
@@ -70,11 +73,24 @@ export function TitleHub({
     finally { setBusy(false); }
   }
 
+  async function quickPlayBot() {
+    if (busy || botBusy) return;
+    setBotBusy(true);
+    setError('');
+    try { await onQuickPlayBot(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'تعذّر تجهيز مباراة نشمي.'); }
+    finally { setBotBusy(false); }
+  }
+
   return (
     <div className="show-home" dir="rtl">
       <header className="show-nav show-wrap">
         <ShowMark />
         <div className="show-nav__tools">
+          <button type="button" className="show-nashmi-btn" aria-label="اسأل نشمي — البوت الأردني" onClick={onOpenBot}>
+            <NashmiMascot size={26} />
+            <span className="hidden sm:inline">اسأل نشمي</span>
+          </button>
           <button type="button" className="show-icon-button" aria-pressed={soundEnabled} aria-label={soundEnabled ? 'كتم الصوت' : 'تفعيل الصوت الهادئ'} onClick={onToggleSound}>
             {soundEnabled ? <Volume2 /> : <VolumeX />}
           </button>
@@ -94,11 +110,13 @@ export function TitleHub({
             <p className="show-hero__tag">يا بتبدع… يا بتتلبّك!</p>
             <div className="show-hero__actions">
               <button type="button" className="show-button show-button--yellow" onClick={() => onStartSetup()}><Play fill="currentColor" size={21} /> يلا نبلّش!</button>
-              <button type="button" className="show-button show-button--cream" disabled={busy} onClick={quickPlay}><Zap size={20} />{busy ? 'لحظة…' : 'تحدي سريع'}</button>
+              <button type="button" className="show-button show-button--cream" disabled={busy || botBusy} onClick={quickPlay}><Zap size={20} />{busy ? 'لحظة…' : 'تحدي سريع'}</button>
+              <button type="button" className="show-button show-button--pink" disabled={busy || botBusy} onClick={quickPlayBot}><Swords size={20} />{botBusy ? 'نشمي عم يجهز…' : 'تحدّى نشمي (بوت)'}</button>
             </div>
             <div className="show-hero__links">
               <button type="button" onClick={onOpenLessonStudio}><BookOpen size={19} /> تحدي الدرس الذكي</button>
               <button type="button" onClick={() => { setError(''); joinDialog.current?.showModal(); }}><DoorOpen size={19} /> انضم للمباراة</button>
+              <button type="button" onClick={onOpenBot}><NashmiMascot size={22} /> اسأل نشمي عن القوانين</button>
             </div>
             {error && !joinDialog.current?.open && <p className="show-error" role="alert">{error}</p>}
           </div>

@@ -306,6 +306,22 @@ export interface RoundConfig {
   memoryRevealSec?: number;
 }
 
+export type BotSkillLevel = 'relaxed' | 'balanced' | 'fierce';
+
+export interface BotOpponentConfig {
+  enabled: boolean;
+  teamIndex: number;
+  skill: BotSkillLevel;
+  personaName: string;
+}
+
+export interface BotChatBubble {
+  id: string;
+  text: string;
+  mood: 'hype' | 'thinking' | 'happy' | 'tease' | 'gg';
+  atMs: number;
+}
+
 export interface SessionSettings {
   hostControlled?: boolean;
   showMode?: boolean;
@@ -319,6 +335,7 @@ export interface SessionSettings {
   buzzerWrongRule?: 'pass_to_other' | 'penalty_and_pass';
   adaptiveDifficulty?: boolean;
   targetDifficultyLevel?: DifficultyLevel;
+  botOpponent?: BotOpponentConfig;
 }
 
 export interface ScoreAuditEntry {
@@ -414,6 +431,7 @@ export interface GameSessionView {
     totalCorrect: number;
     rapidFireAnsweredInRound: number;
   };
+  botChat?: BotChatBubble | null;
   scoreAuditLog?: ScoreAuditEntry[];
   // Host-only fields (strictly stripped for audience/player payloads):
   hostSecret?: {

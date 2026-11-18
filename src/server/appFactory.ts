@@ -31,10 +31,18 @@ import {
   toPublicProfile,
 } from './rbac';
 import { GameSessionHub } from './wsHub';
+import {
+  BotGeminiError,
+  type BotChatMessage,
+  callJordanianBotGemini,
+  getLocalJordanianGuideReply,
+} from './botService';
 import { difficultyToLevel, normalizeAgeGroup } from '../shared/gameRules';
+import { JORDANIAN_BOT_DEFAULT_NAME } from '../shared/jordanianBot';
 import { buildQuestionHash, parseCsvQuestions, validateAndDeduplicateImport } from '../shared/questionSchema';
 import type {
   AgeGroup,
+  BotSkillLevel,
   Difficulty,
   DifficultyLevel,
   LessonDistributionMode,
@@ -987,6 +995,27 @@ export function createAppAndHub(db: Database.Database) {
         res.status(400).json({ error: 'راجع أسماء الفرق والمشاركين.' });
         return;
       }
+      const rawBot = body.settings?.botOpponent;
+      const validSkills: BotSkillLevel[] = ['relaxed', 'balanced', 'fierce'];
+      const sanitizedBot = rawBot?.enabled
+        ? {
+            enabled: true,
+            teamIndex: Number.isInteger(rawBot.teamIndex) && rawBot.teamIndex >= 0 && rawBot.teamIndex <= 1 ? rawBot.teamIndex : 1,
+            skill: validSkills.includes(rawBot.skill) ? rawBot.skill : 'balanced',
+            personaName:
+              typeof rawBot.personaName === 'string' && rawBot.personaName.trim()
+                ? rawBot.personaName.trim().slice(0, 48)
+                : JORDANIAN_BOT_DEFAULT_NAME,
+          }
+        : undefined;
+
+      const sanitizedSettings: Partial<SessionSettings> | undefined = body.settings
+        ? {
+            ...body.settings,
+            botOpponent: sanitizedBot,
+          }
+        : undefined;
+
       const session = hub.createSession({
         hostProfileId: req.user?.id ?? null,
         guestHostKey,
@@ -1000,7 +1029,7 @@ export function createAppAndHub(db: Database.Database) {
         teams: body.teams || [],
         roundTypes: body.roundTypes || ['rapid_fire', 'multiple_choice', 'who_am_i', 'buzzer', 'golden'],
         roundOverrides: body.roundOverrides,
-        settings: body.settings,
+        settings: sanitizedSettings,
         skipVs: Boolean(body.skipVs),
       });
 
@@ -1178,6 +1207,82 @@ export function createAppAndHub(db: Database.Database) {
       return;
     }
     res.json({ session: result.view });
+  });
+
+  // ================= JORDANIAN BOT ADVISOR («نشمي») =================
+
+  app.post('/api/bot/guide', (req, res) => {
+    const body = req.body as {
+      message?: unknown;
+      screen?: unknown;
+      sessionCode?: unknown;
+    };
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    if (!message || message.length > 1000) {
+      res.status(400).json({ error: 'اكتب سؤالك لنشمي (بحد أقصى 1000 حرف).' });
+      return;
+    }
+    const screen = typeof body.screen === 'string' ? body.screen.slice(0, 40) : undefined;
+    const sessionCode =
+      typeof body.sessionCode === 'string' && /^[A-Za-z0-9]{6}$/.test(body.sessionCode.trim())
+        ? body.sessionCode.trim().toUpperCase()
+        : undefined;
+
+    const reply = getLocalJordanianGuideReply(db, hub, {
+      message,
+      screen,
+      sessionCode,
+    });
+    res.json({ ...reply, mode: 'local_guide' });
+  });
+
+  app.post('/api/bot/chat', async (req, res) => {
+    const body = req.body as {
+      message?: unknown;
+      history?: unknown;
+      screen?: unknown;
+      sessionCode?: unknown;
+    };
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    if (!message || message.length > 1200) {
+      res.status(400).json({ error: 'اكتب رسالتك لنشمي (بحد أقصى 1200 حرف).' });
+      return;
+    }
+    const screen = typeof body.screen === 'string' ? body.screen.slice(0, 40) : undefined;
+    const sessionCode =
+      typeof body.sessionCode === 'string' && /^[A-Za-z0-9]{6}$/.test(body.sessionCode.trim())
+        ? body.sessionCode.trim().toUpperCase()
+        : undefined;
+    const history: BotChatMessage[] = Array.isArray(body.history)
+      ? body.history
+          .filter(
+            (item): item is BotChatMessage =>
+              Boolean(item) &&
+              typeof item === 'object' &&
+              (item.role === 'user' || item.role === 'model') &&
+              typeof item.text === 'string'
+          )
+          .slice(-8)
+      : [];
+
+    try {
+      const result = await callJordanianBotGemini(db, hub, {
+        message,
+        history,
+        screen,
+        sessionCode,
+      });
+      res.json({ ...result, mode: 'gemini' });
+    } catch (err) {
+      if (err instanceof BotGeminiError) {
+        res.status(err.status).json({ error: err.message, code: err.code });
+        return;
+      }
+      res.status(502).json({
+        error: 'تعذّر الاتصال بمحرك الذكاء الاصطناعي حالياً.',
+        code: 'UPSTREAM_ERROR',
+      });
+    }
   });
 
   return { app, hub };

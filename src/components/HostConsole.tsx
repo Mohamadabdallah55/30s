@@ -33,10 +33,11 @@ interface HostConsoleProps {
   onBack: () => void;
   onOpenProjector: (code: string) => void;
   onOpenAuth: () => void;
+  onOpenBot?: () => void;
   authProfileId?: string;
 }
 
-export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authProfileId }: HostConsoleProps) {
+export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenBot, authProfileId }: HostConsoleProps) {
   const [session, setSession] = useState<GameSessionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -231,6 +232,15 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, authPro
               <Copy className="w-4 h-4 text-sky-300" />
               <span>{copiedKey === 'projector' ? 'تم نسخ رابط الجمهور' : 'نسخ رابط شاشة الجمهور'}</span>
             </button>
+            {onOpenBot && (
+              <button
+                type="button"
+                onClick={onOpenBot}
+                className="px-3 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 border border-white/10 text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <span>نشمي</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onOpenProjector(session.code)}

@@ -23,9 +23,90 @@ export function RoundArt({ type, className = '' }: { type: RoundType; className?
 }
 
 export function ShowMark() {
-  return <span className="show-mark" aria-label="تحدي الثلاثين">
-    <span className="show-mark__number" dir="ltr">30</span><span>ثانية</span>
-  </span>;
+  return (
+    <span className="show-mark" aria-label="تحدي الـ30 ثانية">
+      <span className="show-mark__badge" dir="ltr">
+        <svg className="show-mark__eyes" viewBox="0 0 42 18" width="32" height="14" aria-hidden="true">
+          <ellipse cx="13" cy="9" rx="7.5" ry="7.5" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.4" />
+          <ellipse cx="29" cy="9" rx="7.5" ry="7.5" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.4" />
+          <circle cx="14.5" cy="9.5" r="3.4" fill="#29183E" />
+          <circle cx="27.5" cy="9.5" r="3.4" fill="#29183E" />
+          <circle cx="15.7" cy="8.2" r="1.2" fill="#FFF9ED" />
+          <circle cx="28.7" cy="8.2" r="1.2" fill="#FFF9ED" />
+        </svg>
+        <span className="show-mark__number">30</span>
+      </span>
+      <span className="show-mark__words">
+        <b>تحدّي</b>
+        <small>ثانية</small>
+      </span>
+    </span>
+  );
+}
+
+export function NashmiMascot({
+  size = 38,
+  mood = 'happy',
+  className = '',
+}: {
+  size?: number;
+  mood?: 'hype' | 'thinking' | 'happy' | 'tease' | 'gg';
+  className?: string;
+}) {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      aria-hidden="true"
+    >
+      {/* Purple comic speech badge background */}
+      <path
+        d="M32 5C16.5 5 6 15.8 6 29.8c0 7.1 3 13.4 8 17.8L10 57l11.2-4.6c3.3 1.2 7 1.8 10.8 1.8 15.5 0 26-10.8 26-24.4C58 15.8 47.5 5 32 5Z"
+        fill="#874CF5"
+        stroke="#29183E"
+        strokeWidth="3.5"
+        strokeLinejoin="round"
+      />
+      {/* Star head */}
+      <path
+        d="m32 13 4.8 9.2 10.2 1.6-7.3 7.3 1.7 10.2L32 36.6l-9.4 4.7 1.7-10.2-7.3-7.3 10.2-1.6Z"
+        fill="#FFE45A"
+        stroke="#29183E"
+        strokeWidth="2.8"
+        strokeLinejoin="round"
+      />
+      {/* Jordanian red & black agal/shemagh crest */}
+      <path
+        d="M22.5 19.5c3-2.8 16-2.8 19 0"
+        fill="none"
+        stroke="#DC2626"
+        strokeWidth="3.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M23.5 17.6c2.7-2.2 14.3-2.2 17 0"
+        fill="none"
+        stroke="#29183E"
+        strokeWidth="2.8"
+        strokeLinecap="round"
+      />
+      {/* Glasses */}
+      <circle cx="26.8" cy="27.5" r="4.2" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+      <circle cx="37.2" cy="27.5" r="4.2" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+      <path d="M31 27.5h2" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+      {/* Pupils */}
+      <circle cx={mood === 'thinking' ? '27.8' : '26.8'} cy="27.6" r="1.8" fill="#29183E" />
+      <circle cx={mood === 'thinking' ? '38.2' : '37.2'} cy="27.6" r="1.8" fill="#29183E" />
+      {/* Smile */}
+      {mood === 'tease' ? (
+        <path d="M28.5 34.5c2 1.2 5.2.8 7-1" fill="none" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+      ) : (
+        <path d="M27.5 33.4c2.1 2.2 6.9 2.2 9 0" fill="none" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+      )}
+    </svg>
+  );
 }
 
 export function TrophyArt() {

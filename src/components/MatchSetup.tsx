@@ -14,6 +14,7 @@ import {
 } from '../shared/gameRules';
 import type {
   AgeGroup,
+  BotSkillLevel,
   Difficulty,
   DifficultyLevel,
   GameSessionView,
@@ -23,18 +24,21 @@ import type {
   RoundConfig,
   RoundType,
 } from '../shared/types';
+import { BOT_SKILL_PROFILES, JORDANIAN_BOT_DEFAULT_NAME } from '../shared/jordanianBot';
 import { apiFetch } from '../utils/api';
 
-import { RoundArt, ShowMark, showRounds } from './ShowArt';
+import { NashmiMascot, RoundArt, ShowMark, showRounds } from './ShowArt';
 
 interface MatchSetupProps {
   user: ProfilePublic | null;
   initialBankId?: string;
   initialRound?: RoundType;
+  initialOpponentMode?: 'solo' | 'two_teams' | 'bot';
   soundEnabled: boolean;
   reducedMotion: boolean;
   onQuickPlay: () => Promise<void>;
   onOpenLessonStudio: () => void;
+  onOpenBot?: () => void;
   initialLessonId?: string | null;
   onBack: () => void;
   onOpenAuth: () => void;
@@ -63,7 +67,13 @@ const GOLDEN_TARGETS: RoundType[] = [
 export function MatchSetup({
   user,
   initialBankId,
-  initialRound, soundEnabled, reducedMotion, onQuickPlay, onOpenLessonStudio,
+  initialRound,
+  initialOpponentMode,
+  soundEnabled,
+  reducedMotion,
+  onQuickPlay,
+  onOpenLessonStudio,
+  onOpenBot,
   initialLessonId,
   onBack,
   onSessionCreated,
@@ -78,7 +88,10 @@ export function MatchSetup({
   const [difficultyLevel, setDifficultyLevel] = useState<DifficultyLevel>(3);
   const [adaptiveDifficulty, setAdaptiveDifficulty] = useState(false);
 
-  const [teamCount, setTeamCount] = useState<1 | 2>(2);
+  const [opponentMode, setOpponentMode] = useState<'solo' | 'two_teams' | 'bot'>(initialOpponentMode ?? 'two_teams');
+  const [botSkill, setBotSkill] = useState<BotSkillLevel>('balanced');
+  const teamCount: 1 | 2 = opponentMode === 'solo' ? 1 : 2;
+  const isVsBot = opponentMode === 'bot';
   const [team1Name, setTeam1Name] = useState(user ? `فريق ${user.displayName}` : 'فريق الأنصار');
   const [team1Color, setTeam1Color] = useState('#38BDF8');
   const [team2Name, setTeam2Name] = useState('فريق المهاجرين');
@@ -95,9 +108,11 @@ export function MatchSetup({
   const [basePoints, setBasePoints] = useState<number | undefined>();
   const [questionLimit, setQuestionLimit] = useState<number | undefined>();
   const [timerSec, setTimerSec] = useState(30);
-  const [verbalRapidFireDefault, setVerbalRapidFireDefault] = useState(true);
+  const [verbalRapidFireDefault, setVerbalRapidFireDefault] = useState(initialOpponentMode !== 'bot');
   const [buzzerWrongRule, setBuzzerWrongRule] = useState<'pass_to_other' | 'penalty_and_pass'>('pass_to_other');
-  const [launchMode, setLaunchMode] = useState<'arena' | 'host_and_projector'>('host_and_projector');
+  const [launchMode, setLaunchMode] = useState<'arena' | 'host_and_projector'>(
+    initialOpponentMode === 'bot' ? 'arena' : 'host_and_projector'
+  );
 
   const varietyBank = banks.find((bank) => bank.id === VARIETY_BANK_ID && (bank.publishedCount ?? 0) > 0);
   const activeBank = banks.find((bank) => bank.id === bankId);
@@ -161,7 +176,9 @@ export function MatchSetup({
 
   const applyPreset = (preset: MatchPreset) => {
     setActivePresetId(preset.id);
-    setTeamCount(preset.teamCount);
+    if (!isVsBot) {
+      setOpponentMode(preset.teamCount === 1 ? 'solo' : 'two_teams');
+    }
     setAgeGroup(preset.ageGroup);
     setDifficulty(preset.difficulty);
     setDifficultyLevel(preset.difficultyLevel);
@@ -224,7 +241,7 @@ export function MatchSetup({
 
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (launchMode === 'host_and_projector' && !user) {
+    if (!isVsBot && launchMode === 'host_and_projector' && !user) {
       onOpenAuth();
       return;
     }
@@ -249,7 +266,7 @@ export function MatchSetup({
         ...(teamCount === 2
           ? [
               {
-                name: team2Name.trim() || 'الفريق الثاني',
+                name: isVsBot ? JORDANIAN_BOT_DEFAULT_NAME : team2Name.trim() || 'الفريق الثاني',
                 color: team2Color,
                 participantIds: [],
                 participantNames: [],
@@ -268,10 +285,11 @@ export function MatchSetup({
         };
       }
 
+      const effectiveLaunchMode = isVsBot ? 'arena' : launchMode;
       const res = await apiFetch<{ session: GameSessionView }>('/api/sessions', {
         method: 'POST',
         body: JSON.stringify({
-          title: 'تحدي الـ30 ثانية — مسجد ابن تيمية',
+          title: isVsBot ? 'تحدّي نشمي (البوت الأردني)' : 'تحدي الـ30 ثانية — مسجد ابن تيمية',
           bankId,
           lessonId: initialLessonId ?? null,
           ageGroup,
@@ -283,17 +301,28 @@ export function MatchSetup({
           roundOverrides,
           settings: {
             showMode: true,
-            soundEnabled, reducedMotion,
-            hostControlled: launchMode === 'host_and_projector',
+            soundEnabled,
+            reducedMotion,
+            hostControlled: effectiveLaunchMode === 'host_and_projector',
             defaultTimerSec: timerSec,
-            verbalRapidFireDefault,
+            verbalRapidFireDefault: isVsBot ? false : verbalRapidFireDefault,
             buzzerWrongRule,
             adaptiveDifficulty,
             targetDifficultyLevel: difficultyLevel,
+            ...(isVsBot
+              ? {
+                  botOpponent: {
+                    enabled: true,
+                    teamIndex: 1,
+                    skill: botSkill,
+                    personaName: JORDANIAN_BOT_DEFAULT_NAME,
+                  },
+                }
+              : {}),
           },
         }),
       });
-      onSessionCreated(res.session, launchMode);
+      onSessionCreated(res.session, effectiveLaunchMode);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر بدء المسابقة');
     } finally {
@@ -306,7 +335,15 @@ export function MatchSetup({
       <form onSubmit={handleStart} className="max-w-6xl mx-auto space-y-6">
         <div className="show-setup__top">
           <button type="button" className="show-button show-button--cream" onClick={onBack}><ArrowRight size={18} /> عالصفحة الرئيسية</button>
-          <ShowMark />
+          <div className="flex items-center gap-2.5">
+            {onOpenBot && (
+              <button type="button" className="show-nashmi-btn" onClick={onOpenBot} aria-label="اسأل نشمي — البوت الأردني">
+                <NashmiMascot size={24} />
+                <span className="hidden sm:inline">اسأل نشمي</span>
+              </button>
+            )}
+            <ShowMark />
+          </div>
         </div>
         <div className="show-setup__hero">
           <div><h1>جهّز التحدّي</h1><p>اختار الفرق والجولات، وخلّي الحماس يبلّش.</p></div>
@@ -366,29 +403,42 @@ export function MatchSetup({
           <div className="lg:col-span-5 space-y-5">
             {/* Step 1 & 2: Mode, Names & Distinct Colors */}
             <div className="rounded-2xl bg-[#101E52] border border-sky-400/20 p-5 space-y-4">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-base font-extrabold text-white flex items-center gap-2">
                   <Users className="w-5 h-5 text-sky-400" />
                   <span>الفرق والألوان</span>
                 </h2>
-                <div className="flex gap-1 p-1 rounded-lg bg-[#09143A]">
+                <div className="flex flex-wrap gap-1 p-1 rounded-lg bg-[#09143A]">
                   <button
                     type="button"
-                    onClick={() => setTeamCount(1)}
+                    onClick={() => setOpponentMode('solo')}
                     className={`px-3 py-1 rounded-md text-xs font-bold whitespace-nowrap ${
-                      teamCount === 1 ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
+                      opponentMode === 'solo' ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
                     }`}
                   >
                     فردي
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTeamCount(2)}
+                    onClick={() => setOpponentMode('two_teams')}
                     className={`px-3 py-1 rounded-md text-xs font-bold whitespace-nowrap ${
-                      teamCount === 2 ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
+                      opponentMode === 'two_teams' ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
                     }`}
                   >
                     فريقان (VS)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpponentMode('bot');
+                      setLaunchMode('arena');
+                      setVerbalRapidFireDefault(false);
+                    }}
+                    className={`px-3 py-1 rounded-md text-xs font-bold whitespace-nowrap ${
+                      opponentMode === 'bot' ? 'bg-amber-400 text-slate-950' : 'text-slate-300'
+                    }`}
+                  >
+                    ضد البوت (نشمي)
                   </button>
                 </div>
               </div>
@@ -396,7 +446,7 @@ export function MatchSetup({
               <div className="space-y-3">
                 <div>
                   <label htmlFor="team1-name" className="block text-xs font-bold text-slate-300 mb-1">
-                    اسم الفريق الأول
+                    {isVsBot ? 'اسمك / اسم فريقك' : 'اسم الفريق الأول'}
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -423,7 +473,7 @@ export function MatchSetup({
                   </div>
                 </div>
 
-                {teamCount === 2 && (
+                {teamCount === 2 && !isVsBot && (
                   <div>
                     <label htmlFor="team2-name" className="block text-xs font-bold text-slate-300 mb-1">
                       اسم الفريق الثاني
@@ -450,6 +500,37 @@ export function MatchSetup({
                           />
                         ))}
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {isVsBot && (
+                  <div className="rounded-xl bg-[#09143A] border border-amber-400/40 p-3 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <NashmiMascot size={30} mood="hype" />
+                        <div>
+                          <div className="text-xs font-black text-amber-300">{JORDANIAN_BOT_DEFAULT_NAME}</div>
+                          <div className="text-[11px] text-slate-300">خصمك المباشر باللهجة الأردنية بكل الـ12 جولة</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <label htmlFor="bot-skill-select" className="block text-[11px] font-bold text-slate-300 mb-1">
+                        مستوى ذكاء وسرعة نشمي:
+                      </label>
+                      <select
+                        id="bot-skill-select"
+                        value={botSkill}
+                        onChange={(e) => setBotSkill(e.target.value as BotSkillLevel)}
+                        className="w-full rounded-xl bg-[#101E52] border border-amber-400/40 px-3 py-2 text-xs font-bold text-white outline-none"
+                      >
+                        {(['relaxed', 'balanced', 'fierce'] as BotSkillLevel[]).map((sk) => (
+                          <option key={sk} value={sk}>
+                            {BOT_SKILL_PROFILES[sk].labelAr}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                 )}
@@ -819,29 +900,35 @@ export function MatchSetup({
                 )}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="text-xs font-bold text-slate-300">طريقة العرض والتحكم:</span>
-                <div className="flex gap-2 p-1 rounded-xl bg-[#09143A]">
-                  <button
-                    type="button"
-                    onClick={() => setLaunchMode('arena')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
-                      launchMode === 'arena' ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
-                    }`}
-                  >
-                    اللعب التفاعلي المباشر (شاشة واحدة)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLaunchMode('host_and_projector')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
-                      launchMode === 'host_and_projector' ? 'bg-amber-400 text-slate-950' : 'text-slate-300'
-                    }`}
-                  >
-                    تحكم من الهاتف
-                  </button>
+              {!isVsBot ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-slate-300">طريقة العرض والتحكم:</span>
+                  <div className="flex gap-2 p-1 rounded-xl bg-[#09143A]">
+                    <button
+                      type="button"
+                      onClick={() => setLaunchMode('arena')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                        launchMode === 'arena' ? 'bg-sky-400 text-slate-950' : 'text-slate-300'
+                      }`}
+                    >
+                      اللعب التفاعلي المباشر (شاشة واحدة)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLaunchMode('host_and_projector')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                        launchMode === 'host_and_projector' ? 'bg-amber-400 text-slate-950' : 'text-slate-300'
+                      }`}
+                    >
+                      تحكم من الهاتف
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="rounded-xl bg-[#09143A] border border-amber-400/35 px-3.5 py-2.5 text-xs font-bold text-amber-200">
+                  مع نشمي: تبدأ المباراة مباشرة في الشاشة التفاعلية دون الحاجة لمشرف أو تسجيل دخول!
+                </div>
+              )}
 
               <button
                 type="submit"

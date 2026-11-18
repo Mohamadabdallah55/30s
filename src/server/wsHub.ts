@@ -18,6 +18,7 @@ import type {
   AgeGroup,
   AudienceQuestionView,
   BidChallengeState,
+  BotChatBubble,
   Difficulty,
   GameSessionView,
   QuestionObjection,
@@ -30,6 +31,11 @@ import type {
   TeamState,
   UndoActionSnapshot,
 } from '../shared/types';
+import {
+  computeBotDelayMs,
+  decideBotTurnAction,
+  pickJordanianBanter,
+} from '../shared/jordanianBot';
 import { getBankAvailability, resetExposureCycleTx, selectNextQuestionTx } from './questionSelection';
 import { resolveUserFromToken } from './rbac';
 
@@ -91,6 +97,9 @@ export interface InternalSessionState {
     'buzzedTeamIndex' | 'failedBuzzTeams' | 'memoryPhase' | 'memoryEndsAtMs' | 'memoryRemainingSec' |
     'stats' | 'previousLeaderIndex' | 'leadChangedAtMs' | 'exhaustedNotice'> }>;
   objections: QuestionObjection[];
+  botChat?: BotChatBubble | null;
+  botNextActionAtMs?: number | null;
+  botPendingKey?: string | null;
   updatedAt: string;
 }
 
@@ -189,8 +198,11 @@ export class GameSessionHub {
     this.tickInterval = setInterval(() => {
       const now = Date.now();
       for (const [code, session] of this.sessionCache.entries()) {
-        if (!this.rooms.get(code)?.size && session.phase !== 'countdown') continue;
-        const changed = this.syncLiveTimer(session, now);
+        if (!this.rooms.get(code)?.size && session.phase !== 'countdown' && !(session.phase === 'playing' && session.settings.botOpponent?.enabled)) continue;
+        let changed = this.syncLiveTimer(session, now);
+        if (this.processBotTurn(session, now)) {
+          changed = true;
+        }
         if (changed) {
           this.saveSession(session);
           this.broadcast(code);
@@ -400,6 +412,16 @@ export class GameSessionHub {
       scoreAuditLog: [],
       undoStack: [],
       objections: [],
+      botChat: settings.botOpponent?.enabled
+        ? {
+            id: `bot-${crypto.randomUUID().slice(0, 8)}`,
+            text: pickJordanianBanter('match_start'),
+            mood: 'hype',
+            atMs: Date.now(),
+          }
+        : null,
+      botNextActionAtMs: null,
+      botPendingKey: null,
       updatedAt: new Date().toISOString(),
     };
 
@@ -639,6 +661,7 @@ export class GameSessionHub {
       settings: s.settings,
       currentQuestion: qView,
       stats: s.stats,
+      botChat: s.botChat ?? null,
       scoreAuditLog: includeHostSecret ? s.scoreAuditLog.slice(-40) : undefined,
       updatedAt: s.updatedAt,
     };
@@ -1256,6 +1279,17 @@ export class GameSessionHub {
       atMs: Date.now(),
     };
 
+    if (s.settings.botOpponent?.enabled && targetTeamIdx !== s.settings.botOpponent.teamIndex) {
+      s.botChat = {
+        id: `bot-${crypto.randomUUID().slice(0, 8)}`,
+        text: leadChanged
+          ? pickJordanianBanter('lead_change')
+          : pickJordanianBanter(evalRes.isCorrect ? 'player_correct' : 'player_wrong'),
+        mood: evalRes.isCorrect ? 'happy' : 'tease',
+        atMs: Date.now(),
+      };
+    }
+
     if (canTransferBuzzerTurn) {
       // Keep question unrevealed and clock running so opponent can buzz/answer!
       s.answerRevealed = false;
@@ -1784,6 +1818,19 @@ export class GameSessionHub {
     }
 
     const winInfo = determineWinner(s.teams);
+    if (s.phase === 'finished' && s.settings.botOpponent?.enabled) {
+      const botIdx = s.settings.botOpponent.teamIndex;
+      s.botChat = {
+        id: `bot-${crypto.randomUUID().slice(0, 8)}`,
+        text: winInfo.isTie
+          ? pickJordanianBanter('match_tie')
+          : winInfo.winnerIndices[0] === botIdx
+          ? pickJordanianBanter('match_win_bot')
+          : pickJordanianBanter('match_win_player'),
+        mood: 'gg',
+        atMs: Date.now(),
+      };
+    }
     if (s.phase === 'finished' && winInfo.winnerIndices.length === 1) {
       const winningTeam = s.teams[winInfo.winnerIndices[0]];
       for (const pid of winningTeam?.participantIds ?? []) {
@@ -1804,5 +1851,118 @@ export class GameSessionHub {
     this.saveSession(s);
     this.broadcast(code);
     return this.projectView(s, true);
+  }
+
+  private processBotTurn(s: InternalSessionState, now: number): boolean {
+    const botCfg = s.settings.botOpponent;
+    if (!botCfg?.enabled) return false;
+    if (s.phase !== 'playing' || !s.currentQuestion || s.answerRevealed || s.memoryPhase === 'memorize') {
+      s.botNextActionAtMs = null;
+      s.botPendingKey = null;
+      return false;
+    }
+
+    const slotKey = this.buildCurrentSlotKey(s) ?? 'none';
+    const pendingKey = [
+      slotKey,
+      s.activeTeamIndex,
+      s.buzzedTeamIndex ?? 'none',
+      s.failedBuzzTeams.join(','),
+      s.revealedClueCount,
+      s.bidState?.phase ?? 'none',
+      s.bidState?.turnTeamIndex ?? 'none',
+      s.bidState?.currentBid ?? 0,
+      s.bidState?.acceptedAnswers.length ?? 0,
+    ].join('|');
+
+    const planned = decideBotTurnAction({
+      session: s,
+      botTeamIndex: botCfg.teamIndex,
+      skill: botCfg.skill,
+    });
+
+    if (planned.type === 'none') {
+      s.botNextActionAtMs = null;
+      s.botPendingKey = null;
+      return false;
+    }
+
+    if (s.botPendingKey !== pendingKey || !s.botNextActionAtMs) {
+      const round = s.rounds[s.currentRoundIndex];
+      const effectiveType =
+        round?.roundType === 'golden' && round.goldenTargetType ? round.goldenTargetType : s.currentQuestion.roundType;
+      const delayKind =
+        planned.type === 'buzz'
+          ? 'buzz'
+          : planned.type === 'bid_raise' || planned.type === 'bid_challenge' || planned.type === 'bid_record_answer'
+          ? 'bid'
+          : ROUND_RULES[effectiveType].multiQuestionWithinTimer
+          ? 'sprint'
+          : 'standard';
+      s.botPendingKey = pendingKey;
+      s.botNextActionAtMs = now + computeBotDelayMs(botCfg.skill, delayKind);
+      return false;
+    }
+
+    if (now < s.botNextActionAtMs) {
+      return false;
+    }
+
+    s.botNextActionAtMs = null;
+    s.botPendingKey = null;
+    s.botChat = {
+      id: `bot-${crypto.randomUUID().slice(0, 8)}`,
+      text: planned.banterText,
+      mood: planned.banterMood,
+      atMs: now,
+    };
+
+    switch (planned.type) {
+      case 'buzz': {
+        this.handleBuzz(s.code, planned.teamIndex, s.currentQuestion.id);
+        return false; // handleBuzz already saved & broadcasted
+      }
+      case 'bid_raise': {
+        this.handleBidAction(
+          s.code,
+          'bid_raise',
+          { teamIndex: planned.teamIndex, targetBid: planned.targetBid },
+          true
+        );
+        return false;
+      }
+      case 'bid_challenge': {
+        this.handleBidAction(s.code, 'bid_challenge', {}, true);
+        return false;
+      }
+      case 'bid_record_answer': {
+        this.handleBidAction(
+          s.code,
+          'bid_record_answer',
+          { teamIndex: planned.teamIndex, answerText: planned.answerText, hostConfirmed: false },
+          false
+        );
+        return false;
+      }
+      case 'bid_complete': {
+        this.handleBidAction(s.code, 'bid_complete', {}, true);
+        return false;
+      }
+      case 'reveal_next_clue': {
+        this.handleHostAction(s.code, 'reveal_next_clue', { questionId: s.currentQuestion.id });
+        return false;
+      }
+      case 'answer': {
+        this.submitPlayerAnswer(
+          s.code,
+          planned.teamIndex,
+          planned.submitted,
+          undefined,
+          s.currentQuestion.id,
+          true
+        );
+        return false;
+      }
+    }
   }
 }

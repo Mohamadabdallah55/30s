@@ -4,11 +4,13 @@ import { AudienceProjector } from './components/AudienceProjector';
 import { AuthModal } from './components/AuthModal';
 import { GameArena } from './components/GameArena';
 import { HostConsole } from './components/HostConsole';
+import { JordanianBotDrawer } from './components/JordanianBotDrawer';
 import { LessonStudio } from './components/LessonStudio';
 import { MatchSetup } from './components/MatchSetup';
 import { PlayerProfile } from './components/PlayerProfile';
 import { TeamBuzzer } from './components/TeamBuzzer';
 import { TitleHub } from './components/TitleHub';
+import { JORDANIAN_BOT_DEFAULT_NAME } from './shared/jordanianBot';
 import type { GameSessionView, ProfilePublic, RoundType } from './shared/types';
 import { apiFetch, getAuthToken, setAuthToken } from './utils/api';
 import { soundFx } from './utils/sound';
@@ -34,6 +36,7 @@ export default function App() {
   const [setupRound, setSetupRound] = useState<RoundType | undefined>();
   const [studioLessonId, setStudioLessonId] = useState<string | null>(null);
   const [buzzerTeamIndex, setBuzzerTeamIndex] = useState<number>(0);
+  const [botDrawerOpen, setBotDrawerOpen] = useState(false);
 
   const [soundEnabled, setSoundEnabled] = useState(false); // Quiet mosque default
   const [calmMode] = useState(true);
@@ -228,6 +231,71 @@ export default function App() {
     handleSessionCreated(session, 'arena');
   };
 
+  const handleQuickPlayBot = async () => {
+    const choices: RoundType[] = ['multiple_choice', 'rapid_fire', 'who_am_i', 'true_false', 'fill_blank'];
+    let bankId = 'bank-import-thirty-seconds-v1';
+    let availability = await apiFetch<{ byRoundType: Record<string, { unseen: number }> }>(
+      '/api/questions/availability?bankId=' + bankId
+    );
+    let types = choices.filter((type) => availability.byRoundType[type]?.unseen > 0).slice(0, 3);
+    if (!types.length) {
+      bankId = 'bank-general-mosque';
+      availability = await apiFetch<{ byRoundType: Record<string, { unseen: number }> }>(
+        '/api/questions/availability?bankId=' + bankId
+      );
+      types = choices.filter((type) => availability.byRoundType[type]?.unseen > 0).slice(0, 3);
+    }
+    if (!types.length) {
+      throw new Error('ما ضل أسئلة جديدة متاحة حالياً. جرّب من الإعداد تختار بنك ثاني أو إعادة دورة الأسئلة.');
+    }
+    const roundOverrides = Object.fromEntries(
+      types.map((type) => [
+        type,
+        {
+          questionsPerRound: Math.min(type === 'rapid_fire' ? 4 : 2, availability.byRoundType[type].unseen),
+          durationSec: 30,
+        },
+      ])
+    );
+    const playerTeamName = user?.displayName ? `فريق ${user.displayName}` : 'فريق النشامى';
+    const { session } = await apiFetch<{ session: GameSessionView }>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'تحدّي نشمي (البوت الأردني)',
+        bankId,
+        teams: [
+          {
+            name: playerTeamName,
+            color: '#38BDF8',
+            participantIds: user ? [user.id] : [],
+            participantNames: user ? [user.displayName] : [],
+          },
+          {
+            name: JORDANIAN_BOT_DEFAULT_NAME,
+            color: '#F59E0B',
+            participantIds: [],
+            participantNames: [],
+          },
+        ],
+        roundTypes: types,
+        roundOverrides,
+        settings: {
+          showMode: true,
+          verbalRapidFireDefault: false,
+          soundEnabled,
+          reducedMotion,
+          botOpponent: {
+            enabled: true,
+            teamIndex: 1,
+            skill: 'balanced',
+            personaName: JORDANIAN_BOT_DEFAULT_NAME,
+          },
+        },
+      }),
+    });
+    handleSessionCreated(session, 'arena');
+  };
+
   const handleOpenProjector = (code: string) => {
     window.open(`/?mode=projector&code=${encodeURIComponent(code)}`, '_blank', 'noopener,noreferrer');
   };
@@ -243,6 +311,8 @@ export default function App() {
           onToggleReducedMotion={() => setReducedMotion((p) => !p)}
           onStartSetup={(type) => { setSetupRound(type); navigateTo('setup'); }}
           onQuickPlay={handleQuickPlay}
+          onQuickPlayBot={handleQuickPlayBot}
+          onOpenBot={() => setBotDrawerOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}
           onOpenProfile={() => navigateTo('profile')}
           onOpenLessonStudio={() => navigateTo('lesson_studio')}
@@ -256,6 +326,7 @@ export default function App() {
           initialRound={setupRound}
           onOpenLessonStudio={() => navigateTo('lesson_studio')}
           onQuickPlay={handleQuickPlay}
+          onOpenBot={() => setBotDrawerOpen(true)}
           soundEnabled={soundEnabled}
           reducedMotion={reducedMotion}
           user={user}
@@ -273,6 +344,8 @@ export default function App() {
           onPlayAgain={() => { setSetupRound(undefined); navigateTo('setup'); }}
           onExit={goBackOneStep}
           onGoHome={goHome}
+          onOpenBot={() => setBotDrawerOpen(true)}
+          onSessionUpdate={setActiveSession}
           onOpenHostPanel={(code) => {
             setSessionCode(code);
             navigateTo('host');
@@ -286,6 +359,7 @@ export default function App() {
           onBack={goBackOneStep}
           onOpenProjector={handleOpenProjector}
           onOpenAuth={() => setAuthOpen(true)}
+          onOpenBot={() => setBotDrawerOpen(true)}
           authProfileId={user?.id}
         />
       )}
@@ -348,6 +422,14 @@ export default function App() {
         open={authOpen}
         onClose={() => setAuthOpen(false)}
         onSuccess={(profile) => setUser(profile)}
+      />
+
+      <JordanianBotDrawer
+        open={botDrawerOpen}
+        onClose={() => setBotDrawerOpen(false)}
+        screen={screen}
+        activeSession={['arena', 'host', 'projector', 'buzzer'].includes(screen) ? activeSession : null}
+        onStartVsBot={handleQuickPlayBot}
       />
     </div>
   );

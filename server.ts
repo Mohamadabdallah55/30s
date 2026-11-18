@@ -11,7 +11,7 @@ import { readBundledBank } from './src/server/bundledBankData';
 import { approveFootballAuctions } from './src/server/approveFootballAuctions';
 import geminiBank from './data/imports/questions_bank_5000.json';
 
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.DEFAULT_APP_PORT || 3000);
 const isProd = process.env.NODE_ENV === 'production';
 
 const db = createDatabase(process.env.T30_DB_PATH || undefined);

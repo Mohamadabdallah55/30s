@@ -155,6 +155,17 @@ var ROUND_RULES = {
   }
 };
 var ALL_ROUND_TYPES = Object.keys(ROUND_RULES);
+var AGE_GROUP_LABELS = {
+  kids_7_10: "\u0627\u0644\u0628\u0631\u0627\u0639\u0645 (7\u201310 \u0633\u0646\u0648\u0627\u062A)",
+  preteen_11_13: "\u0627\u0644\u0623\u0634\u0628\u0627\u0644 (11\u201313 \u0633\u0646\u0629)",
+  teen_14_17: "\u0627\u0644\u0641\u062A\u064A\u0627\u0646 \u0648\u0627\u0644\u0634\u0628\u0627\u0628 (14\u201317 \u0633\u0646\u0629)",
+  adults_18_plus: "\u0627\u0644\u0643\u0628\u0627\u0631 (+18 \u0633\u0646\u0629)",
+  family: "\u0639\u0627\u0626\u0644\u064A \u0648\u0645\u0641\u062A\u0648\u062D \u0644\u0644\u062C\u0645\u064A\u0639",
+  // Legacy aliases preserved for backward compatibility
+  kids: "\u0627\u0644\u0628\u0631\u0627\u0639\u0645 (7\u201310 \u0633\u0646\u0648\u0627\u062A)",
+  youth: "\u0627\u0644\u0641\u062A\u064A\u0627\u0646 \u0648\u0627\u0644\u0634\u0628\u0627\u0628 (14\u201317 \u0633\u0646\u0629)",
+  adults: "\u0627\u0644\u0643\u0628\u0627\u0631 (+18 \u0633\u0646\u0629)"
+};
 function normalizeAgeGroup(age) {
   switch (age) {
     case "kids":
@@ -173,6 +184,11 @@ function normalizeAgeGroup(age) {
       return "family";
   }
 }
+var DIFFICULTY_LABELS = {
+  easy: "\u0645\u0628\u062A\u062F\u0626 / \u0633\u0647\u0644",
+  medium: "\u0645\u062A\u0648\u0633\u0637",
+  hard: "\u0645\u062A\u0642\u062F\u0645 / \u0639\u0645\u064A\u0642"
+};
 function levelToDifficulty(level) {
   if (level <= 2) return "easy";
   if (level === 3) return "medium";
@@ -473,42 +489,176 @@ function buildKnowledgeMapFromAnalysis(params) {
     contentDiversityNote
   };
 }
+var SYNTHETIC_FALLBACK_PREFIXES = [
+  "\u0645\u0639\u0637\u0649 \u0627\u0644\u0635\u0641\u062D\u0629 ",
+  "\u0645\u062D\u0637\u0629 \u0632\u0645\u0646\u064A\u0629 \u2014 \u0635",
+  "\u0645\u0642\u0627\u0631\u0646\u0629 \u0627\u0644\u0635\u0641\u062D\u0629 ",
+  "\u0645\u062D\u0648\u0631 "
+];
+function isSyntheticFallbackText(text3) {
+  const trimmed = text3.trim();
+  return SYNTHETIC_FALLBACK_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+function normalizeAtomStem(text3) {
+  const normalized = text3.trim().toLowerCase().replace(/[\u064B-\u065F\u0670\u0640]/g, "").replace(/[أإآ]/g, "\u0627").replace(/ة/g, "\u0647").replace(/ى/g, "\u064A").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  return normalized.split(" ").filter((w) => w.length > 1).slice(0, 5).join(" ");
+}
+function deduplicateKnowledgeAtoms(km) {
+  const seen = /* @__PURE__ */ new Set();
+  const register = (page, rawText) => {
+    const trimmed = rawText.trim();
+    if (!trimmed || isSyntheticFallbackText(trimmed)) return false;
+    const stem = normalizeAtomStem(trimmed);
+    if (!stem) return false;
+    const key = `${Math.max(1, page || 1)}::${stem}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
+  let uniqueDirectFacts = 0;
+  for (const f of km.directFacts) {
+    if (register(f.page, f.text)) uniqueDirectFacts++;
+  }
+  let uniqueCauses = 0;
+  for (const c of km.causesAndEffects) {
+    if (isSyntheticFallbackText(c.cause)) continue;
+    if (register(c.page, `${c.cause} ${c.effect}`)) uniqueCauses++;
+  }
+  let uniqueFigures = 0;
+  for (const e of km.eventsAndFigures) {
+    if (isSyntheticFallbackText(e.name)) continue;
+    if (register(e.page, `${e.name} ${e.roleOrEvent}`)) uniqueFigures++;
+  }
+  let uniqueListWeight = 0;
+  for (const l of km.listsAndClassifications) {
+    if (register(l.page, `${l.title} ${l.items.slice(0, 2).join(" ")}`)) {
+      uniqueListWeight += Math.min(2.5, Math.max(1, l.items.length * 0.6));
+    }
+  }
+  let uniqueComparisons = 0;
+  for (const c of km.comparisons) {
+    if (isSyntheticFallbackText(c.title)) continue;
+    if (register(c.page, `${c.title} ${c.sides.join(" ")}`)) uniqueComparisons++;
+  }
+  let uniqueAnalytical = 0;
+  for (const a of km.analyticalPoints) {
+    if (register(a.page, a.point)) uniqueAnalytical++;
+  }
+  let uniqueMainConcepts = 0;
+  for (const mc of km.mainConcepts) {
+    if (register(mc.pages[0], mc.title)) uniqueMainConcepts++;
+  }
+  let uniqueSubConcepts = 0;
+  for (const sc of km.subConcepts) {
+    if (register(sc.pages[0], sc.title)) uniqueSubConcepts++;
+  }
+  let uniqueGameable = 0;
+  for (const g of km.gameablePoints) {
+    if (isSyntheticFallbackText(g.idea)) continue;
+    if (register(g.page, g.idea)) uniqueGameable++;
+  }
+  const totalUniqueAtoms = uniqueDirectFacts * 1 + uniqueMainConcepts * 1.1 + uniqueSubConcepts * 0.7 + uniqueCauses * 1.1 + uniqueFigures * 0.95 + uniqueListWeight + uniqueComparisons * 1 + uniqueAnalytical * 1 + uniqueGameable * 0.35;
+  return {
+    uniqueDirectFacts,
+    uniqueMainConcepts,
+    uniqueSubConcepts,
+    uniqueCauses,
+    uniqueFigures,
+    uniqueListWeight,
+    uniqueComparisons,
+    uniqueAnalytical,
+    uniqueGameable,
+    totalUniqueAtoms
+  };
+}
 function estimateLessonCapacity(params) {
   const km = params.knowledgeMap;
   const normAge = normalizeAgeGroup(params.ageGroup);
-  const factAtoms = km.directFacts.length * 1.1 + km.mainConcepts.length * 1.6 + km.subConcepts.length * 0.85 + km.causesAndEffects.length * 1.5 + km.eventsAndFigures.length * 1.25 + km.listsAndClassifications.reduce((acc, l) => acc + Math.min(4, l.items.length * 0.75), 0) + km.comparisons.length * 1.4 + km.analyticalPoints.length * 1.3 + km.gameablePoints.length * 0.6;
-  const pageSupport = km.readablePageCount * (km.contentDiversityScore >= 65 ? 3.2 : 2.1);
-  let rawPotential = Math.round(Math.min(110, Math.max(3, Math.min(factAtoms * 1.25, pageSupport + factAtoms * 0.65))));
+  const dedup = deduplicateKnowledgeAtoms(km);
+  const factAtoms = Math.max(2, dedup.totalUniqueAtoms);
+  const pageSupport = km.readablePageCount * (km.contentDiversityScore >= 65 ? 2.6 : 1.8);
+  let rawPotential = Math.round(
+    Math.min(95, Math.max(3, Math.min(factAtoms, pageSupport + factAtoms * 0.35)))
+  );
   if (typeof params.reportedMaxDistinct === "number" && params.reportedMaxDistinct > 0) {
-    rawPotential = Math.round(rawPotential * 0.55 + Math.min(100, params.reportedMaxDistinct) * 0.45);
+    const reported = Math.min(100, Math.max(2, Math.round(params.reportedMaxDistinct)));
+    const minSignal = Math.min(rawPotential, reported);
+    const maxSignal = Math.max(rawPotential, reported);
+    rawPotential = Math.min(
+      Math.max(4, Math.round(reported * 1.05)),
+      Math.round(minSignal * 0.65 + maxSignal * 0.25)
+    );
+  }
+  let totalExtractedWords = 0;
+  let isSparseText = false;
+  if (Array.isArray(params.pageTexts) && params.pageTexts.length > 0) {
+    totalExtractedWords = params.pageTexts.reduce(
+      (sum, p) => sum + String(p.text || "").trim().split(/\s+/).filter(Boolean).length,
+      0
+    );
+    if (totalExtractedWords > 0) {
+      const avgWordsPerPage = totalExtractedWords / Math.max(1, km.readablePageCount);
+      const wordSupport = Math.max(4, Math.round(totalExtractedWords / 28));
+      if (wordSupport < rawPotential) {
+        const blendWeight = avgWordsPerPage < 28 ? 0.4 : 0.28;
+        rawPotential = Math.max(
+          4,
+          Math.round(rawPotential * (1 - blendWeight) + wordSupport * blendWeight)
+        );
+        if (avgWordsPerPage < 32) {
+          isSparseText = true;
+        }
+      }
+    }
   }
   const ageFactor = {
     kids_7_10: 0.72,
     preteen_11_13: 0.85,
     teen_14_17: 0.96,
-    adults_18_plus: 1.05,
+    adults_18_plus: 1.04,
     family: 0.92
   };
-  const deepAtoms = km.causesAndEffects.length + km.comparisons.length + km.analyticalPoints.length + km.eventsAndFigures.length * 0.5;
+  const deepAtoms = dedup.uniqueCauses + dedup.uniqueComparisons + dedup.uniqueAnalytical + dedup.uniqueFigures * 0.5;
   let diffFactor = 1;
   if (params.difficulty === "hard") {
-    diffFactor = deepAtoms >= 5 ? 0.95 : 0.68;
+    diffFactor = deepAtoms >= 5 ? 0.94 : 0.7;
   } else if (params.difficulty === "easy") {
-    diffFactor = 0.9;
+    diffFactor = 0.92;
   }
-  const estimatedMaxCount = Math.max(4, Math.min(100, Math.round(rawPotential * ageFactor[normAge] * diffFactor)));
+  let estimatedMaxCount = Math.max(
+    4,
+    Math.min(100, Math.round(rawPotential * ageFactor[normAge] * diffFactor))
+  );
+  let constrainedByRounds = false;
+  if (Array.isArray(params.selectedRoundTypes) && params.selectedRoundTypes.length > 0 && Array.isArray(params.suitability) && params.suitability.length > 0) {
+    const selectedSet = new Set(params.selectedRoundTypes);
+    const activeItems = params.suitability.filter(
+      (s) => selectedSet.has(s.roundType) && s.selectable && !s.isMultiplier
+    );
+    if (activeItems.length > 0) {
+      const roundCapacitySum = activeItems.reduce(
+        (sum, s) => sum + Math.max(1, s.expectedValidCount),
+        0
+      );
+      const roundCeiling = Math.max(3, Math.round(roundCapacitySum * 0.85));
+      if (roundCeiling < estimatedMaxCount) {
+        estimatedMaxCount = Math.max(3, roundCeiling);
+        constrainedByRounds = true;
+      }
+    }
+  }
   const suggestedCount = Math.max(
-    3,
-    Math.min(estimatedMaxCount, Math.round(estimatedMaxCount * 0.72))
+    2,
+    Math.min(estimatedMaxCount, Math.round(estimatedMaxCount * 0.65))
   );
   const conservativeCount = Math.max(
     2,
-    Math.min(suggestedCount, Math.round(estimatedMaxCount * 0.48))
+    Math.min(suggestedCount, Math.round(estimatedMaxCount * 0.4))
   );
   let confidence = Math.round(
-    45 + km.contentDiversityScore / 100 * 32 + Math.min(18, (km.mainConcepts.length + km.directFacts.length) * 1.1)
+    45 + km.contentDiversityScore / 100 * 30 + Math.min(18, (dedup.uniqueMainConcepts + dedup.uniqueDirectFacts) * 1.1)
   );
-  if (km.directFacts.length + km.mainConcepts.length < 4 && km.readablePageCount <= 2) {
+  if (dedup.uniqueDirectFacts + dedup.uniqueMainConcepts < 4 && km.readablePageCount <= 2) {
     confidence -= 15;
   }
   if (typeof params.receivedCount === "number" && params.receivedCount > 0 && typeof params.rejectedCount === "number") {
@@ -520,8 +670,20 @@ function estimateLessonCapacity(params) {
   }
   confidence = Math.max(25, Math.min(97, confidence));
   const isShort = estimatedMaxCount < 14;
-  const ageNote = normAge === "kids_7_10" ? "\u062A\u0645 \u062A\u0636\u064A\u064A\u0642 \u0627\u0644\u062A\u0642\u062F\u064A\u0631 \u0644\u064A\u0646\u0627\u0633\u0628 \u0628\u0633\u0627\u0637\u0629 \u0627\u0644\u0641\u0647\u0645 \u0644\u062F\u0649 \u0627\u0644\u0628\u0631\u0627\u0639\u0645 (7\u201310 \u0633\u0646\u0648\u0627\u062A) \u062F\u0648\u0646 \u062A\u0639\u0642\u064A\u062F." : params.difficulty === "hard" && deepAtoms < 5 ? "\u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0645\u062A\u0642\u062F\u0645\u0629 \u0627\u0644\u062A\u062D\u0644\u064A\u0644\u064A\u0629 \u0645\u062D\u062F\u0648\u062F\u0629 \u0644\u0642\u0644\u0651\u0629 \u0627\u0644\u0639\u0644\u0627\u0642\u0627\u062A \u0627\u0644\u0633\u0628\u0628\u064A\u0629 \u0648\u0627\u0644\u0645\u0642\u0627\u0631\u0646\u0627\u062A \u0627\u0644\u0639\u0645\u064A\u0642\u0629 \u0641\u064A \u0627\u0644\u0646\u0635." : "";
-  const explanationAr = isShort ? `\u0645\u062D\u062A\u0648\u0649 \u0627\u0644\u062F\u0631\u0633 \u0645\u0631\u0643\u0651\u0632 \u0648\u0645\u062D\u062F\u0648\u062F (${km.readablePageCount} \u0635\u0641\u062D\u0627\u062A\u060C ${km.mainConcepts.length} \u0645\u062D\u0627\u0648\u0631 \u0631\u0626\u064A\u0633\u064A\u0629)\u061B \u0644\u0630\u0627 \u0627\u0644\u062A\u0642\u062F\u064A\u0631 \u0645\u062D\u0627\u0641\u0638 \u0644\u062A\u0641\u0627\u062F\u064A \u0627\u0644\u062A\u0643\u0631\u0627\u0631 \u0623\u0648 \u0627\u062E\u062A\u0644\u0627\u0642 \u0645\u0639\u0644\u0648\u0645\u0627\u062A. ${ageNote}`.trim() : `\u064A\u062D\u062A\u0648\u064A \u0627\u0644\u062F\u0631\u0633 \u0639\u0644\u0649 ${km.readablePageCount} \u0635\u0641\u062D\u0629 \u0645\u0642\u0631\u0648\u0621\u0629 \u0648${km.mainConcepts.length} \u0645\u062D\u0627\u0648\u0631 \u0631\u0626\u064A\u0633\u064A\u0629 \u0648${km.directFacts.length} \u062D\u0642\u064A\u0642\u0629 \u0645\u0628\u0627\u0634\u0631\u0629 \u0648${km.causesAndEffects.length + km.comparisons.length + km.analyticalPoints.length} \u0646\u0642\u0627\u0637 \u062A\u062D\u0644\u064A\u0644\u064A\u0629/\u0645\u0642\u0627\u0631\u0646\u0627\u062A\u061B \u0645\u0645\u0627 \u064A\u0633\u0645\u062D \u0628\u0628\u0646\u0643 \u0623\u0633\u0626\u0644\u0629 \u0645\u062A\u0648\u0627\u0632\u0646. ${ageNote}`.trim();
+  const notes = [];
+  if (normAge === "kids_7_10") {
+    notes.push("\u062A\u0645 \u062A\u0636\u064A\u064A\u0642 \u0627\u0644\u062A\u0642\u062F\u064A\u0631 \u0644\u064A\u0646\u0627\u0633\u0628 \u0628\u0633\u0627\u0637\u0629 \u0627\u0644\u0641\u0647\u0645 \u0644\u062F\u0649 \u0627\u0644\u0628\u0631\u0627\u0639\u0645 (7\u201310 \u0633\u0646\u0648\u0627\u062A) \u062F\u0648\u0646 \u062A\u0639\u0642\u064A\u062F.");
+  } else if (params.difficulty === "hard" && deepAtoms < 5) {
+    notes.push("\u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0645\u062A\u0642\u062F\u0645\u0629 \u0627\u0644\u062A\u062D\u0644\u064A\u0644\u064A\u0629 \u0645\u062D\u062F\u0648\u062F\u0629 \u0644\u0642\u0644\u0651\u0629 \u0627\u0644\u0639\u0644\u0627\u0642\u0627\u062A \u0627\u0644\u0633\u0628\u0628\u064A\u0629 \u0648\u0627\u0644\u0645\u0642\u0627\u0631\u0646\u0627\u062A \u0627\u0644\u0639\u0645\u064A\u0642\u0629 \u0641\u064A \u0627\u0644\u0646\u0635.");
+  }
+  if (isSparseText) {
+    notes.push("\u0643\u062B\u0627\u0641\u0629 \u0627\u0644\u0646\u0635 \u0627\u0644\u0645\u0633\u062A\u062E\u0631\u062C \u0641\u064A \u0627\u0644\u0635\u0641\u062D\u0627\u062A \u0645\u062D\u062F\u0648\u062F\u0629\u061B \u0644\u0630\u0627 \u062E\u064F\u0641\u0651\u0636 \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u062F\u0646\u0649 \u0648\u0627\u0644\u0645\u0642\u062A\u0631\u062D \u0644\u064A\u0643\u0648\u0646 \u0642\u0627\u0628\u0644\u0627\u064B \u0644\u0644\u062A\u062D\u0642\u064A\u0642 \u062F\u0648\u0646 \u062A\u0643\u0631\u0627\u0631.");
+  }
+  if (constrainedByRounds) {
+    notes.push("\u062A\u0645 \u0636\u0628\u0637 \u0627\u0644\u0633\u0642\u0641 \u0628\u0646\u0627\u0621\u064B \u0639\u0644\u0649 \u0633\u0639\u0629 \u0627\u0644\u062C\u0648\u0644\u0627\u062A \u0627\u0644\u0645\u062E\u062A\u0627\u0631\u0629 \u062D\u0627\u0644\u064A\u0627\u064B \u0641\u0642\u0637.");
+  }
+  const extraNote = notes.join(" ");
+  const explanationAr = isShort ? `\u0645\u062D\u062A\u0648\u0649 \u0627\u0644\u062F\u0631\u0633 \u0645\u0631\u0643\u0651\u0632 \u0648\u0645\u062D\u062F\u0648\u062F (${km.readablePageCount} \u0635\u0641\u062D\u0627\u062A\u060C ${km.mainConcepts.length} \u0645\u062D\u0627\u0648\u0631 \u0631\u0626\u064A\u0633\u064A\u0629)\u061B \u0644\u0630\u0627 \u0627\u0644\u062A\u0642\u062F\u064A\u0631 \u0645\u062D\u0627\u0641\u0638 \u0644\u062A\u0641\u0627\u062F\u064A \u0627\u0644\u062A\u0643\u0631\u0627\u0631 \u0623\u0648 \u0627\u062E\u062A\u0644\u0627\u0642 \u0645\u0639\u0644\u0648\u0645\u0627\u062A. ${extraNote}`.trim() : `\u064A\u062D\u062A\u0648\u064A \u0627\u0644\u062F\u0631\u0633 \u0639\u0644\u0649 ${km.readablePageCount} \u0635\u0641\u062D\u0629 \u0645\u0642\u0631\u0648\u0621\u0629 \u0648${km.mainConcepts.length} \u0645\u062D\u0627\u0648\u0631 \u0631\u0626\u064A\u0633\u064A\u0629 \u0648${dedup.uniqueDirectFacts} \u062D\u0642\u064A\u0642\u0629 \u0641\u0631\u064A\u062F\u0629 \u0648${dedup.uniqueCauses + dedup.uniqueComparisons + dedup.uniqueAnalytical} \u0646\u0642\u0627\u0637 \u062A\u062D\u0644\u064A\u0644\u064A\u0629/\u0645\u0642\u0627\u0631\u0646\u0627\u062A\u061B \u0645\u0645\u0627 \u064A\u062A\u064A\u062D \u0627\u0644\u0648\u0635\u0648\u0644 \u0644\u0644\u062D\u062F \u0627\u0644\u0623\u062F\u0646\u0649 \u0627\u0644\u0645\u0636\u0645\u0648\u0646 (${conservativeCount}) \u0648\u0627\u0644\u062A\u062F\u0631\u062C \u0628\u0623\u0645\u0627\u0646. ${extraNote}`.trim();
   return {
     conservativeCount,
     suggestedCount,
@@ -2059,19 +2221,32 @@ function buildLessonDistributionPlan(params) {
     "\u0627\u0644\u062A\u0633\u0644\u0633\u0644 \u0627\u0644\u0632\u0645\u0646\u064A \u0644\u0644\u0623\u062D\u062F\u0627\u062B",
     "\u0627\u0644\u062A\u0645\u064A\u064A\u0632 \u0628\u064A\u0646 \u0627\u0644\u062D\u0642\u0627\u0626\u0642 \u0627\u0644\u062B\u0627\u0628\u062A\u0629 \u0648\u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u0627\u062A"
   ] : ["\u0627\u0644\u0641\u0647\u0645 \u0648\u0627\u0644\u0627\u0633\u062A\u064A\u0639\u0627\u0628 \u0627\u0644\u0645\u0628\u0627\u0634\u0631", "\u0627\u0644\u0631\u0628\u0637 \u0627\u0644\u0633\u064A\u0627\u0642\u064A", "\u0627\u0644\u0627\u0633\u062A\u0646\u062A\u0627\u062C \u0627\u0644\u0645\u0646\u0627\u0633\u0628 \u0644\u0644\u0645\u0631\u062D\u0644\u0629"];
+  const estimatedBatches = Math.max(1, Math.ceil(totalTarget / batchSize));
   const plan = [];
   let assigned = 0;
   let batchIndex = 0;
   while (assigned < totalTarget) {
     const count = Math.min(batchSize, totalTarget - assigned);
+    let assignedPages;
+    if (estimatedBatches <= totalPages && batchIndex < estimatedBatches) {
+      const sliceStart = Math.floor(batchIndex * totalPages / estimatedBatches) + 1;
+      const sliceEnd = Math.max(sliceStart, Math.floor((batchIndex + 1) * totalPages / estimatedBatches));
+      assignedPages = Array.from(
+        { length: Math.min(totalPages, sliceEnd) - sliceStart + 1 },
+        (_, k) => sliceStart + k
+      );
+    } else {
+      const singlePage = batchIndex % totalPages + 1;
+      assignedPages = [singlePage];
+    }
+    const assignedPageSet = new Set(assignedPages);
+    const matchingTopics = params.analysis.topics.filter(
+      (t) => typeof t !== "string" && Array.isArray(t.pageNumbers) && t.pageNumbers.some((p) => assignedPageSet.has(p))
+    ).map((t) => typeof t === "string" ? t : t.title).filter(Boolean);
     const topicStart = batchIndex * 2 % safeTopics.length;
-    const assignedTopics = Array.from(
+    const assignedTopics = matchingTopics.length > 0 ? Array.from(new Set(matchingTopics)).slice(0, 3) : Array.from(
       /* @__PURE__ */ new Set([safeTopics[topicStart], safeTopics[(topicStart + 1) % safeTopics.length]])
     );
-    const startPage = Math.min(totalPages, batchIndex * 2 % totalPages + 1);
-    const nextPage = Math.min(totalPages, startPage + 1);
-    const crossPage = Math.min(totalPages, (startPage + Math.floor(totalPages / 2) - 1) % totalPages + 1);
-    const assignedPages = Array.from(/* @__PURE__ */ new Set([startPage, nextPage, crossPage])).sort((a, b) => a - b);
     const rotTypes = Array.from(
       /* @__PURE__ */ new Set([
         roundTypes[batchIndex % roundTypes.length],
@@ -2677,16 +2852,19 @@ function buildLessonPedagogyArtifacts(params) {
     ageGroup: params.ageGroup,
     analysis: params.analysis
   });
-  const capacityEstimate = estimateLessonCapacity({
-    knowledgeMap,
-    ageGroup: params.ageGroup,
-    difficulty: params.difficulty,
-    reportedMaxDistinct: params.analysis.estimatedMaxDistinctQuestions
-  });
   const roundSuitability = evaluateRoundSuitability({
     knowledgeMap,
     ageGroup: params.ageGroup,
     difficulty: params.difficulty
+  });
+  const capacityEstimate = estimateLessonCapacity({
+    knowledgeMap,
+    ageGroup: params.ageGroup,
+    difficulty: params.difficulty,
+    reportedMaxDistinct: params.analysis.estimatedMaxDistinctQuestions,
+    pageTexts: params.analysis.pageTexts,
+    selectedRoundTypes: params.selectedRoundTypes,
+    suitability: roundSuitability
   });
   const generationPlanPreview = buildLessonGenerationPlanPreview({
     knowledgeMap,
@@ -2786,7 +2964,7 @@ ${params.pageRangeHint ? `\u0627\u0644\u062A\u0632\u0645 \u0628\u0646\u0637\u062
 5. pageSummaries: \u0645\u0644\u062E\u0635 \u0645\u0648\u062C\u0632 \u0644\u0643\u0644 \u0635\u0641\u062D\u0629 \u064A\u062A\u0636\u0645\u0646 \u0627\u0644\u062D\u0642\u0627\u0626\u0642 \u0627\u0644\u062B\u0627\u0628\u062A\u0629\u060C \u0627\u0644\u062C\u062F\u0627\u0648\u0644 \u0648\u0627\u0644\u0645\u0642\u0627\u0631\u0646\u0627\u062A\u060C \u0648\u0627\u0644\u062A\u0633\u0644\u0633\u0644 \u0627\u0644\u0632\u0645\u0646\u064A.
 6. pageTexts: \u0627\u0644\u0646\u0635 \u0627\u0644\u0623\u0633\u0627\u0633\u064A \u0627\u0644\u0645\u0633\u062A\u062E\u0644\u0635 \u0644\u0643\u0644 \u0635\u0641\u062D\u0629 {page, text} \u0628\u0635\u0648\u0631\u0629 \u0645\u0631\u0643\u0632\u0629 \u062A\u062D\u0641\u0638 \u0627\u0644\u062D\u0642\u0627\u0626\u0642 \u0648\u0627\u0644\u0623\u0631\u0642\u0627\u0645 \u0648\u0627\u0644\u0645\u0642\u0627\u0631\u0646\u0627\u062A \u0648\u0627\u0644\u062A\u0633\u0644\u0633\u0644 \u0627\u0644\u0632\u0645\u0646\u064A \u062F\u0648\u0646 \u062D\u0634\u0648.
 7. objectives: \u0627\u0644\u0623\u0647\u062F\u0627\u0641 \u0627\u0644\u062A\u0639\u0644\u064A\u0645\u064A\u0629 \u0627\u0644\u0642\u0627\u0628\u0644\u0629 \u0644\u0644\u0627\u062E\u062A\u0628\u0627\u0631.
-8. estimatedMaxDistinctQuestions: \u0627\u0644\u062A\u0642\u062F\u064A\u0631 \u0627\u0644\u0648\u0627\u0642\u0639\u064A \u0644\u0639\u062F\u062F \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0641\u0631\u064A\u062F\u0629 \u0627\u0644\u0645\u0648\u062B\u0642\u0629 \u0627\u0644\u062A\u064A \u064A\u062F\u0639\u0645\u0647\u0627 \u0627\u0644\u0645\u0644\u0641 \u0641\u0639\u0644\u064A\u0627\u064B \u062F\u0648\u0646 \u062A\u0643\u0631\u0627\u0631 \u0623\u0648 \u0627\u062E\u062A\u0644\u0627\u0642 (\u0644\u0627 \u062A\u0628\u0627\u0644\u063A \u0641\u064A \u0627\u0644\u062F\u0631\u0648\u0633 \u0627\u0644\u0642\u0635\u064A\u0631\u0629).
+8. estimatedMaxDistinctQuestions: \u0627\u0644\u062A\u0642\u062F\u064A\u0631 \u0627\u0644\u0648\u0627\u0642\u0639\u064A \u0627\u0644\u0635\u0627\u0631\u0645 \u0644\u0639\u062F\u062F \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0641\u0631\u064A\u062F\u0629 \u0627\u0644\u0642\u0627\u0628\u0644\u0629 \u0644\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0646\u0635 \u062F\u0648\u0646 \u062A\u0643\u0631\u0627\u0631 \u0646\u0641\u0633 \u0627\u0644\u0641\u0643\u0631\u0629 \u0623\u0648 \u0639\u062F\u0651 \u0627\u0644\u0639\u0646\u0627\u0648\u064A\u0646 \u0627\u0644\u0645\u0643\u0631\u0631\u0629 \u0648\u0627\u0644\u0634\u0631\u0627\u0626\u062D \u0627\u0644\u0645\u062A\u0634\u0627\u0628\u0647\u0629 (\u062A\u0642\u062F\u064A\u0631 \u0645\u062D\u0627\u0641\u0638 \u064A\u062A\u062D\u0642\u0642 \u0641\u0639\u0644\u064A\u0627\u064B).
 9. coverageSummary: \u0645\u0644\u062E\u0635 \u0627\u0644\u062A\u063A\u0637\u064A\u0629 \u0627\u0644\u0639\u0644\u0645\u064A\u0629 \u0644\u0644\u062F\u0631\u0633.
 10. \u0623\u0628\u0639\u0627\u062F \u062E\u0631\u064A\u0637\u0629 \u0627\u0644\u0645\u0639\u0631\u0641\u0629 \u0627\u0644\u0645\u0645\u0643\u0646 \u0627\u0633\u062A\u062E\u0631\u0627\u062C\u0647\u0627 \u0628\u062F\u0642\u0629 \u0645\u0646 \u0627\u0644\u0646\u0635 \u0641\u0642\u0637:
 - directFacts: \u0627\u0644\u062D\u0642\u0627\u0626\u0642 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0627\u0644\u0645\u0624\u0643\u062F\u0629 \u0645\u0639 \u0631\u0642\u0645 \u0627\u0644\u0635\u0641\u062D\u0629.
@@ -2864,17 +3042,19 @@ ${params.pageRangeHint ? `\u0627\u0644\u062A\u0632\u0645 \u0628\u0646\u0637\u062
     requestedCount: params.requestedCountHint > 0 ? params.requestedCountHint : void 0
   });
   const knowledgeMap = existingKm ?? artifacts.knowledgeMap;
-  const capacityEstimate = existingKm ? estimateLessonCapacity({
-    knowledgeMap,
-    ageGroup: params.ageGroup,
-    difficulty: params.difficulty,
-    reportedMaxDistinct: analysis.estimatedMaxDistinctQuestions
-  }) : artifacts.capacityEstimate;
   const roundSuitability = existingKm ? evaluateRoundSuitability({
     knowledgeMap,
     ageGroup: params.ageGroup,
     difficulty: params.difficulty
   }) : artifacts.roundSuitability;
+  const capacityEstimate = existingKm ? estimateLessonCapacity({
+    knowledgeMap,
+    ageGroup: params.ageGroup,
+    difficulty: params.difficulty,
+    reportedMaxDistinct: analysis.estimatedMaxDistinctQuestions,
+    pageTexts: analysis.pageTexts,
+    suitability: roundSuitability
+  }) : artifacts.capacityEstimate;
   const generationPlanPreview = existingKm ? buildLessonGenerationPlanPreview({
     knowledgeMap,
     capacity: capacityEstimate,
@@ -3195,19 +3375,22 @@ function reestimateLessonPotential(db2, lessonId, params) {
   const existingCount = Number(
     db2.prepare(`SELECT COUNT(*) as cnt FROM questions WHERE bank_id = ?`).get(String(row.bank_id))?.cnt || 0
   );
+  const roundSuitability = evaluateRoundSuitability({
+    knowledgeMap,
+    ageGroup: nextAge,
+    difficulty: nextDifficulty
+  });
   const capacityEstimate = estimateLessonCapacity({
     knowledgeMap,
     ageGroup: nextAge,
     difficulty: nextDifficulty,
     reportedMaxDistinct: analysis?.estimatedMaxDistinctQuestions,
+    pageTexts: analysis?.pageTexts,
+    selectedRoundTypes: params.selectedRoundTypes,
+    suitability: roundSuitability,
     verifiedCount: existingCount,
     rejectedCount: Number(row.rejected_count || 0),
     receivedCount: Number(row.received_count || 0)
-  });
-  const roundSuitability = evaluateRoundSuitability({
-    knowledgeMap,
-    ageGroup: nextAge,
-    difficulty: nextDifficulty
   });
   const generationPlanPreview = buildLessonGenerationPlanPreview({
     knowledgeMap,
@@ -3556,9 +3739,22 @@ async function processLessonBatches(params) {
     let firstFatalErr = null;
     let nextScanIdx = startIdx;
     let compensationRotOffset = 0;
+    const totalPagesCount = Math.max(1, analysis.actualPageCount);
+    const allPageNumbers = Array.from({ length: totalPagesCount }, (_, i) => i + 1);
+    const savedPerPage = /* @__PURE__ */ new Map();
+    for (const p of allPageNumbers) savedPerPage.set(p, 0);
+    for (const r of existingRows) {
+      if (typeof r.source_page === "number" && r.source_page >= 1) {
+        savedPerPage.set(r.source_page, (savedPerPage.get(r.source_page) ?? 0) + 1);
+      }
+    }
+    const exhaustedPages = /* @__PURE__ */ new Set();
+    const highYieldFallbackRounds = ["multiple_choice", "true_false", "fill_blank", "rapid_fire"].filter((rt) => allowedRoundTypes.includes(rt));
     const topUpPlanIfNeeded = (referenceSlot) => {
       if (materialExhaustedNote || stopDispatching || totalVerifiedCount >= requestedCount) return;
       if (params.retryOnlyFailedBatch) return;
+      const availablePages = allPageNumbers.filter((p) => !exhaustedPages.has(p));
+      if (availablePages.length === 0) return;
       const remainingPendingCount = plan.filter((p) => p.status === "pending").length;
       const pendingCapacity = plan.filter((p) => p.status === "pending").reduce((sum, p) => sum + Math.min(p.targetCount, currentBatchSize), 0);
       let deficit = requestedCount - totalVerifiedCount - pendingCapacity;
@@ -3567,16 +3763,23 @@ async function processLessonBatches(params) {
         while (deficit > 0 && plan.length < 70) {
           compensationRotOffset++;
           const chunk = Math.min(currentBatchSize, deficit);
+          const sortedByLeastCovered = [...availablePages].sort((a, b) => {
+            const diff = (savedPerPage.get(a) ?? 0) - (savedPerPage.get(b) ?? 0);
+            if (diff !== 0) return diff;
+            return (a + compensationRotOffset) % totalPagesCount - (b + compensationRotOffset) % totalPagesCount;
+          });
+          const targetPages = sortedByLeastCovered.slice(0, Math.min(3, sortedByLeastCovered.length)).sort((a, b) => a - b);
+          const roundPool = highYieldFallbackRounds.length > 0 && compensationRotOffset % 2 === 1 ? highYieldFallbackRounds : allowedRoundTypes;
           const rotatedRounds = [
-            allowedRoundTypes[compensationRotOffset % allowedRoundTypes.length],
-            allowedRoundTypes[(compensationRotOffset + 1) % allowedRoundTypes.length]
+            roundPool[compensationRotOffset % roundPool.length],
+            roundPool[(compensationRotOffset + 1) % roundPool.length]
           ];
           const compTopics = underTopics.length > 0 ? [underTopics[compensationRotOffset % underTopics.length], ...referenceSlot.assignedTopics.slice(0, 1)] : referenceSlot.assignedTopics;
           plan.push({
             batchIndex: plan.length,
             targetCount: chunk,
             assignedTopics: Array.from(new Set(compTopics)),
-            assignedPages: referenceSlot.assignedPages,
+            assignedPages: targetPages,
             targetRoundTypes: Array.from(new Set(rotatedRounds)),
             cognitiveFocus: referenceSlot.cognitiveFocus,
             status: "pending",
@@ -3638,7 +3841,7 @@ async function processLessonBatches(params) {
         try {
           const compactAvoid = keptFingerprints.length > 0 ? `
 \u0639\u0646\u0627\u0648\u064A\u0646 \u0648\u0645\u0641\u0627\u0647\u064A\u0645 \u062A\u0645 \u062A\u063A\u0637\u064A\u062A\u0647\u0627 \u0628\u0627\u0644\u0641\u0639\u0644 (\u0645\u0645\u0646\u0648\u0639 \u062A\u0643\u0631\u0627\u0631\u0647\u0627):
-${keptFingerprints.slice(-15).map((f) => `- ${f}`).join("\n")}` : "";
+${keptFingerprints.slice(-30).map((f) => `- ${f}`).join("\n")}` : "";
           const recentRejectionAdvice = rejectedDetails.length > 0 ? `
 \u062A\u0641\u0627\u062F\u064E \u0623\u0633\u0628\u0627\u0628 \u0627\u0644\u0631\u0641\u0636 \u0627\u0644\u0633\u0627\u0628\u0642\u0629:
 ${rejectedDetails.slice(-6).map((r) => `- ${r.reason}`).join("\n")}` : "";
@@ -3688,9 +3891,15 @@ ${params.pageRangeHint ? `- \u0646\u0637\u0627\u0642 \u0627\u0644\u0635\u0641\u0
           totalReceivedCount += candidates.length;
           let verdictMap = /* @__PURE__ */ new Map();
           if (candidates.length > 0) {
-            const verifyPages = Array.from(
-              /* @__PURE__ */ new Set([...slot.assignedPages, ...candidates.map((c) => c.sourcePage)])
-            );
+            const verifyPageSet = /* @__PURE__ */ new Set();
+            for (const p of [...slot.assignedPages, ...candidates.map((c) => c.sourcePage)]) {
+              for (const adj of [p - 1, p, p + 1]) {
+                if (adj >= 1 && adj <= analysis.actualPageCount) {
+                  verifyPageSet.add(adj);
+                }
+              }
+            }
+            const verifyPages = Array.from(verifyPageSet).sort((a, b) => a - b);
             const verifySlice = buildPageSliceText(analysis, verifyPages);
             const useVerifyTextOnly = verifySlice.hasRichTextSlice && verifySlice.sliceText.length > 0;
             const verifyPrompt = `\u0623\u0646\u062A \u0645\u062F\u0642\u0642 \u0639\u0644\u0645\u064A \u0645\u0633\u062A\u0642\u0644. \u0631\u0627\u062C\u0639 \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629 \u0627\u0644\u0635\u063A\u064A\u0631\u0629 (${candidates.length} \u0623\u0633\u0626\u0644\u0629) \u0645\u0642\u0627\u0628\u0644 \u0646\u0635 \u0627\u0644\u0635\u0641\u062D\u0627\u062A \u0627\u0644\u0645\u0631\u0641\u0642 \u0641\u0642\u0637.
@@ -3745,8 +3954,11 @@ ${JSON.stringify(
                 const verdict = verdictMap.get(i);
                 const pageNum = verdict?.correctedPage || cand.sourcePage;
                 const excerpt = normalizeArabicText(cand.sourceExcerpt);
-                const extracted = analysis.pageTexts.find((p) => p.page === pageNum)?.text;
-                const isSupported = verdict?.supported ?? Boolean(extracted && excerpt.length >= 12 && normalizeArabicText(extracted).includes(excerpt));
+                const adjacentPageTexts = [pageNum - 1, pageNum, pageNum + 1].filter((p) => p >= 1 && p <= analysis.actualPageCount).map((p) => analysis.pageTexts.find((pt) => pt.page === p)?.text || "").filter(Boolean).join(" ");
+                const normExtracted = normalizeArabicText(adjacentPageTexts);
+                const excerptWords = excerpt.split(" ").filter((w) => w.length > 1);
+                const localWordOverlap = excerptWords.length >= 4 ? normExtracted.includes(excerptWords.slice(0, 4).join(" ")) || normExtracted.includes(excerptWords.slice(-4).join(" ")) : false;
+                const isSupported = verdict?.supported ?? Boolean(normExtracted && excerpt.length >= 12 && (normExtracted.includes(excerpt) || localWordOverlap));
                 if (!isSupported || excerpt.length < 4 || pageNum < 1 || pageNum > analysis.actualPageCount) {
                   rejectedInAttempt++;
                   pushRejectedLog({
@@ -3787,6 +3999,7 @@ ${JSON.stringify(
                 const trimmedPrompt = cand.prompt.trim();
                 keptPrompts.push(trimmedPrompt);
                 keptFingerprints.push(toCompactFactFingerprint(trimmedPrompt, pageNum));
+                savedPerPage.set(pageNum, (savedPerPage.get(pageNum) ?? 0) + 1);
                 totalVerifiedCount++;
                 totalAcceptedCount++;
                 savedInAttempt++;
@@ -3845,7 +4058,13 @@ ${JSON.stringify(
           } else {
             consecutiveZeroGainBatches = 0;
           }
-          if (genBatch.materialExhausted || consecutiveZeroGainBatches >= 2) {
+          if (genBatch.materialExhausted) {
+            for (const p of slot.assignedPages) {
+              exhaustedPages.add(p);
+            }
+          }
+          const remainingUnexhaustedPages = allPageNumbers.filter((p) => !exhaustedPages.has(p));
+          if (remainingUnexhaustedPages.length === 0 || consecutiveZeroGainBatches >= 3) {
             materialExhaustedNote = genBatch.exhaustionReason || `\u0645\u062D\u062A\u0648\u0649 \u0627\u0644\u0645\u0644\u0641 \u0644\u0627 \u064A\u0643\u0641\u064A \u0644\u062A\u0648\u0644\u064A\u062F \u0639\u062F\u062F \u0623\u0643\u0628\u0631 \u0645\u0646 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0641\u0631\u064A\u062F\u0629 \u062F\u0648\u0646 \u062A\u0643\u0631\u0627\u0631 \u0623\u0648 \u0627\u062E\u062A\u0644\u0627\u0642\u061B \u062A\u0645 \u062D\u0641\u0638 ${totalVerifiedCount} \u0633\u0624\u0627\u0644\u064B\u0627 \u0645\u0648\u062B\u0642\u064B\u0627 \u0641\u0642\u0637.`;
             stopDispatching = true;
           } else {
@@ -4036,6 +4255,9 @@ ${JSON.stringify(
       ageGroup,
       difficulty,
       reportedMaxDistinct: analysis.estimatedMaxDistinctQuestions,
+      pageTexts: analysis.pageTexts,
+      selectedRoundTypes: allowedRoundTypes,
+      suitability: roundSuitability,
       verifiedCount: actualTotal,
       rejectedCount: totalRejectedCount,
       receivedCount: totalReceivedCount
@@ -4589,6 +4811,604 @@ function requireRole(allowed) {
 // src/server/wsHub.ts
 import crypto4 from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
+
+// src/shared/jordanianBot.ts
+var JORDANIAN_BOT_DEFAULT_NAME = "\u0646\u0634\u0645\u064A (\u0627\u0644\u0628\u0648\u062A \u0627\u0644\u0623\u0631\u062F\u0646\u064A)";
+var ROUND_JORDANIAN_GUIDES = {
+  rapid_fire: {
+    roundType: "rapid_fire",
+    nicknameJo: "\u0627\u0644\u0631\u0634\u0627\u0634 \u0627\u0644\u0633\u0631\u064A\u0639",
+    howToPlayJo: "\u0623\u0633\u0626\u0644\u0629 \u0633\u0631\u064A\u0639\u0629 \u0648\u0631\u0627 \u0628\u0639\u0636 \u062E\u0644\u0627\u0644 30 \u062B\u0627\u0646\u064A\u0629 \u0645\u062A\u0648\u0627\u0635\u0644\u0629 \u2014 \u0627\u0644\u0648\u0642\u062A \u0645\u0627 \u0628\u0648\u0642\u0641 \u0628\u064A\u0646 \u0633\u0624\u0627\u0644 \u0648\u0633\u0624\u0627\u0644!",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0648\u062D\u062F\u0629 \u0639\u0646 \u0643\u0644 \u0625\u062C\u0627\u0628\u0629 \u0635\u062D\u060C \u0648\u0645\u0639 \u0633\u0644\u0633\u0644\u0629 \u0625\u062C\u0627\u0628\u0627\u062A \u0645\u062A\u062A\u0627\u0644\u064A\u0629 \u0628\u062A\u0643\u0633\u0628 \u0628\u0648\u0646\u0635 (+1 \u0639\u0646\u062F 3 \u0635\u062D \u0648\u0631\u0627 \u0628\u0639\u0636).",
+    proTipJo: "\u0625\u0630\u0627 \u0627\u0644\u0633\u0624\u0627\u0644 \u0639\u0644\u0651\u0642 \u0645\u0639\u0643 \u0644\u0627 \u062A\u0636\u064A\u0639 \u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629\u060C \u062A\u062E\u0637\u0651\u0627\u0647 \u0639\u0627\u0644\u0633\u0631\u064A\u0639 \u0648\u062E\u0630 \u0627\u0644\u0644\u064A \u0628\u0639\u062F\u0647!"
+  },
+  list_multiple: {
+    roundType: "list_multiple",
+    nicknameJo: "\u0627\u0630\u0643\u0631 \u062B\u0644\u0627\u062B\u0629 \u0623\u0648 \u062E\u0645\u0633\u0629",
+    howToPlayJo: "\u0628\u0646\u0637\u0644\u0628 \u0645\u0646\u0643 \u062A\u0630\u0643\u0631 3 \u0623\u0648 5 \u0625\u062C\u0627\u0628\u0627\u062A \u0635\u062D\u064A\u062D\u0629 \u0648\u0645\u062E\u062A\u0644\u0641\u0629 \u0644\u0646\u0641\u0633 \u0627\u0644\u0633\u0624\u0627\u0644 \u0642\u0628\u0644 \u0645\u0627 \u064A\u062E\u0644\u0635 \u0627\u0644\u0648\u0642\u062A.",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0639\u0646 \u0643\u0644 \u0639\u0646\u0635\u0631 \u0635\u062D \u0648\u0645\u0634 \u0645\u0643\u0631\u0631\u060C \u0648\u0645\u0645\u0646\u0648\u0639 \u062A\u0643\u062A\u0628 \u0646\u0641\u0633 \u0627\u0644\u0625\u062C\u0627\u0628\u0629 \u0628\u0635\u064A\u063A\u0629 \u062B\u0627\u0646\u064A\u0629.",
+    proTipJo: "\u0628\u0644\u0651\u0634 \u0628\u0627\u0644\u0623\u0634\u064A\u0627\u0621 \u0627\u0644\u0645\u0636\u0645\u0648\u0646\u0629 \u0648\u0627\u0644\u0648\u0627\u0636\u062D\u0629 \u0623\u0648\u0644\u0627\u064B \u0648\u0628\u0639\u062F\u064A\u0646 \u0643\u0645\u0651\u0644 \u0627\u0644\u0628\u0627\u0642\u064A."
+  },
+  true_false: {
+    roundType: "true_false",
+    nicknameJo: "\u0635\u062D \u0623\u0648 \u062E\u0637\u0623",
+    howToPlayJo: "\u062C\u0645\u0644 \u0633\u0631\u064A\u0639\u0629 \u0648\u0631\u0627 \u0628\u0639\u0636 \u062E\u0644\u0627\u0644 \u0627\u0644\u0645\u0624\u0642\u062A \u0627\u0644\u0645\u062A\u0648\u0627\u0635\u0644\u060C \u062A\u0642\u0631\u0631 \u0628\u0633\u0631\u0639\u0629 \u0625\u0630\u0627 \u0635\u062D \u0648\u0644\u0627 \u062E\u0637\u0623.",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0644\u0643\u0644 \u0642\u0631\u0627\u0631 \u0635\u062D\u060C \u0648\u0627\u0644\u0633\u0644\u0633\u0644\u0629 \u0627\u0644\u0645\u062A\u0648\u0627\u0635\u0644\u0629 \u0628\u062A\u0639\u0637\u064A\u0643 \u0646\u0642\u0627\u0637 \u0632\u064A\u0627\u062F\u0629.",
+    proTipJo: '\u0627\u0646\u062A\u0628\u0647 \u0644\u0644\u062A\u0641\u0627\u0635\u064A\u0644 \u0627\u0644\u0635\u063A\u064A\u0631\u0629 \u0628\u0627\u0644\u0633\u0624\u0627\u0644 \u0632\u064A \u0627\u0644\u062A\u0648\u0627\u0631\u064A\u062E \u0623\u0648 \u0643\u0644\u0645\u0627\u062A "\u0641\u0642\u0637" \u0648"\u062F\u0627\u0626\u0645\u0627\u064B" \u0639\u0634\u0627\u0646 \u0645\u0627 \u062A\u0646\u062E\u062F\u0639!'
+  },
+  multiple_choice: {
+    roundType: "multiple_choice",
+    nicknameJo: "\u0627\u062E\u062A\u064A\u0627\u0631 \u0645\u0646 \u0645\u062A\u0639\u062F\u062F",
+    howToPlayJo: "\u0633\u0624\u0627\u0644 \u0648\u0623\u0631\u0628\u0639\u0629 \u062E\u064A\u0627\u0631\u0627\u062A (\u0623\u060C \u0628\u060C \u062C\u060C \u062F) \u2014 \u0625\u062C\u0627\u0628\u0629 \u0648\u062D\u062F\u0629 \u0628\u0633 \u0647\u064A \u0627\u0644\u0635\u062D.",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0644\u0643\u0644 \u0627\u062E\u062A\u064A\u0627\u0631 \u0635\u062D (\u0623\u0648 \u0646\u0642\u0637\u062A\u064A\u0646 \u0625\u0630\u0627 \u0643\u0627\u0646\u062A \u062F\u0627\u062E\u0644 \u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u0630\u0647\u0628\u064A\u0629).",
+    proTipJo: "\u0627\u0633\u062A\u0628\u0639\u062F \u0627\u0644\u062E\u064A\u0627\u0631\u064A\u0646 \u0627\u0644\u0628\u0639\u064A\u062F\u0627\u062A \u0623\u0648\u0644\u0627\u064B\u060C \u0628\u0639\u062F\u0647\u0627 \u0627\u0644\u0627\u062E\u062A\u064A\u0627\u0631 \u0628\u064A\u0646 \u0627\u0644\u0628\u0627\u0642\u064A \u0628\u0635\u064A\u0631 \u0623\u0633\u0647\u0644 \u0628\u0643\u062B\u064A\u0631."
+  },
+  fill_blank: {
+    roundType: "fill_blank",
+    nicknameJo: "\u0623\u0643\u0645\u0644 \u0627\u0644\u0641\u0631\u0627\u063A",
+    howToPlayJo: "\u0622\u064A\u0629 \u0623\u0648 \u062D\u062F\u064A\u062B \u0623\u0648 \u0645\u0639\u0644\u0648\u0645\u0629 \u0641\u064A\u0647\u0627 \u0641\u0631\u0627\u063A (......) \u0648\u0644\u0627\u0632\u0645 \u062A\u0643\u0645\u0644 \u0627\u0644\u0643\u0644\u0645\u0629 \u0623\u0648 \u0627\u0644\u062C\u0645\u0644\u0629 \u0627\u0644\u0646\u0627\u0642\u0635\u0629 \u0628\u062F\u0642\u0629.",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0644\u0644\u0625\u062C\u0627\u0628\u0629 \u0627\u0644\u062F\u0642\u064A\u0642\u0629 \u2014 \u0648\u0627\u0644\u0646\u0638\u0627\u0645 \u0628\u062A\u0633\u0627\u0647\u0644 \u0645\u0639 \u0627\u0644\u0647\u0645\u0632\u0627\u062A \u0648\u0627\u0644\u062A\u0634\u0643\u064A\u0644 \u0648\u0627\u0644\u062A\u0627\u0621 \u0627\u0644\u0645\u0631\u0628\u0648\u0637\u0629.",
+    proTipJo: "\u0627\u0642\u0631\u0623 \u0627\u0644\u062C\u0645\u0644\u0629 \u0628\u0635\u0648\u062A \u0648\u0627\u0637\u064A \u0628\u0631\u0627\u0633\u0643\u060C \u0627\u0644\u0645\u0639\u0646\u0649 \u0648\u0627\u0644\u0633\u064A\u0627\u0642 \u0644\u062D\u0627\u0644\u0647\u0645 \u0628\u062F\u0644\u0651\u0648\u0643 \u0639\u0627\u0644\u0643\u0644\u0645\u0629."
+  },
+  who_am_i: {
+    roundType: "who_am_i",
+    nicknameJo: "\u0645\u0646 \u0623\u0646\u0627\u061F",
+    howToPlayJo: "\u0628\u0646\u0639\u0637\u064A\u0643 3 \u0623\u062F\u0644\u0629 \u0628\u0627\u0644\u062A\u062F\u0631\u064A\u062C \u0639\u0646 \u0634\u062E\u0635\u064A\u0629 \u0623\u0648 \u0645\u0639\u0644\u0645\u060C \u0648\u0628\u062A\u0642\u062F\u0631 \u062A\u0637\u0644\u0628 \u062A\u0644\u0645\u064A\u062D \u0625\u0630\u0627 \u0645\u0627 \u0639\u0631\u0641\u062A\u0647\u0627.",
+    scoringJo: "\u0625\u0630\u0627 \u0639\u0631\u0641\u062A\u0647\u0627 \u0645\u0646 \u0627\u0644\u062F\u0644\u064A\u0644 \u0627\u0644\u0623\u0648\u0644 \u0628\u062A\u0627\u062E\u062F 3 \u0646\u0642\u0627\u0637! \u0645\u0646 \u0627\u0644\u062B\u0627\u0646\u064A \u0646\u0642\u0637\u062A\u064A\u0646\u060C \u0648\u0645\u0646 \u0627\u0644\u062B\u0627\u0644\u062B \u0646\u0642\u0637\u0629 \u0648\u062D\u062F\u0629.",
+    proTipJo: "\u0644\u0648 \u0645\u062A\u0623\u0643\u062F \u0645\u0646 \u0623\u0648\u0644 \u062F\u0644\u064A\u0644 \u062C\u0627\u0648\u0628 \u0641\u0648\u0631\u0627\u064B \u0648\u062E\u064F\u0630 \u0627\u0644\u06403 \u0646\u0642\u0627\u0637 \u0642\u0628\u0644 \u0645\u0627 \u062A\u0637\u0644\u0628 \u062F\u0644\u064A\u0644 \u062B\u0627\u0646\u064A."
+  },
+  odd_one_out: {
+    roundType: "odd_one_out",
+    nicknameJo: "\u0627\u0643\u062A\u0634\u0641 \u0627\u0644\u0645\u062E\u062A\u0644\u0641",
+    howToPlayJo: "\u0623\u0631\u0628\u0639\u0629 \u0639\u0646\u0627\u0635\u0631: \u062B\u0644\u0627\u062B\u0629 \u0645\u0646\u0647\u0645 \u0628\u064A\u0646\u0647\u0645 \u0631\u0627\u0628\u0637 \u0645\u0634\u062A\u0631\u0643 \u0648\u0648\u0627\u062D\u062F \u0634\u0627\u0630 \u0639\u0646\u0647\u0645\u060C \u0627\u062E\u062A\u0627\u0631 \u0627\u0644\u0645\u062E\u062A\u0644\u0641.",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0648\u062D\u062F\u0629 \u0639\u0646 \u0627\u062E\u062A\u064A\u0627\u0631 \u0627\u0644\u0639\u0646\u0635\u0631 \u0627\u0644\u0645\u062E\u062A\u0644\u0641 (\u0648\u0641\u064A \u0627\u0644\u0644\u0639\u0628 \u0627\u0644\u0645\u0628\u0627\u0634\u0631 \u062A\u0642\u062F\u0631 \u062A\u0648\u0636\u062D \u0627\u0644\u0633\u0628\u0628).",
+    proTipJo: "\u0627\u0633\u0623\u0644 \u062D\u0627\u0644\u0643: \u0634\u0648 \u0627\u0644\u0631\u0627\u0628\u0637 \u0628\u064A\u0646 \u0623\u0648\u0644 \u062B\u0644\u0627\u062B\u0629\u061F \u0628\u0645\u062C\u0631\u062F \u0645\u0627 \u062A\u0645\u0633\u0643 \u0627\u0644\u0631\u0627\u0628\u0637 \u0628\u0628\u064A\u0646 \u0627\u0644\u0645\u062E\u062A\u0644\u0641 \u0644\u062D\u0627\u0644\u0647."
+  },
+  order_items: {
+    roundType: "order_items",
+    nicknameJo: "\u0631\u062A\u0628 \u0627\u0644\u0639\u0646\u0627\u0635\u0631",
+    howToPlayJo: "\u0623\u0631\u0628\u0639 \u0628\u0637\u0627\u0642\u0627\u062A \u0645\u062E\u0631\u0628\u0637\u0629 \u0648\u0644\u0627\u0632\u0645 \u062A\u0631\u062A\u0628\u0647\u0627 \u062D\u0633\u0628 \u0627\u0644\u0645\u0639\u064A\u0627\u0631 \u0627\u0644\u0645\u0643\u062A\u0648\u0628 (\u0645\u062B\u0644\u0627\u064B \u0632\u0645\u0646\u064A\u0627\u064B \u0645\u0646 \u0627\u0644\u0623\u0642\u062F\u0645 \u0644\u0644\u0623\u062D\u062F\u062B).",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0648\u062D\u062F\u0629 \u0644\u0645\u0627 \u064A\u0637\u0644\u0639 \u0627\u0644\u062A\u0631\u062A\u064A\u0628 \u0643\u0627\u0645\u0644 100% \u0645\u0637\u0627\u0628\u0642 \u0644\u0644\u0645\u0639\u064A\u0627\u0631.",
+    proTipJo: "\u062B\u0628\u0651\u062A \u0623\u0648\u0644 \u0639\u0646\u0635\u0631 \u0648\u0622\u062E\u0631 \u0639\u0646\u0635\u0631 \u0628\u0627\u0644\u0623\u0648\u0644\u060C \u0648\u0628\u0639\u062F\u064A\u0646 \u0631\u062A\u0651\u0628 \u0627\u0644\u0627\u062B\u0646\u064A\u0646 \u0627\u0644\u0644\u064A \u0628\u0627\u0644\u0646\u0635."
+  },
+  memory: {
+    roundType: "memory",
+    nicknameJo: "\u062A\u062D\u062F\u064A \u0627\u0644\u0630\u0627\u0643\u0631\u0629",
+    howToPlayJo: "\u0628\u062A\u0638\u0647\u0631 \u0642\u062F\u0627\u0645\u0643 \u0628\u0637\u0627\u0642\u0627\u062A \u062A\u062D\u0641\u0638\u0647\u0627 \u0644\u0643\u0645 \u062B\u0627\u0646\u064A\u0629\u060C \u0648\u0628\u0639\u062F\u064A\u0646 \u0628\u062A\u062E\u062A\u0641\u064A \u0648\u0628\u062A\u062C\u0627\u0648\u0628 \u0645\u0646 \u0630\u0627\u0643\u0631\u062A\u0643!",
+    scoringJo: "\u0646\u0642\u0637\u0629 \u0639\u0646 \u0643\u0644 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0635\u062D\u064A\u062D\u061B \u0648\u0628\u0639\u0636 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0628\u062A\u0637\u0644\u0628 \u0646\u0641\u0633 \u0627\u0644\u062A\u0631\u062A\u064A\u0628 \u062A\u0645\u0627\u0645\u0627\u064B.",
+    proTipJo: "\u0627\u0631\u0628\u0637 \u0627\u0644\u0639\u0646\u0627\u0635\u0631 \u0628\u0642\u0635\u0629 \u0635\u063A\u064A\u0631\u0629 \u0623\u0648 \u062E\u064F\u0630 \u0623\u0648\u0644 \u062D\u0631\u0641 \u0645\u0646 \u0643\u0644 \u0643\u0644\u0645\u0629 \u0639\u0634\u0627\u0646 \u062A\u062B\u0628\u062A \u0628\u0628\u0627\u0644\u0643."
+  },
+  buzzer: {
+    roundType: "buzzer",
+    nicknameJo: "\u0627\u0644\u0645\u0648\u0627\u062C\u0647\u0629 \u0628\u0627\u0644\u062C\u0631\u0633",
+    howToPlayJo: "\u0627\u0644\u0633\u0624\u0627\u0644 \u0628\u0646\u0639\u0631\u0636 \u0644\u0644\u0641\u0631\u064A\u0642\u064A\u0646 \u0645\u0639 \u0628\u0639\u0636\u061B \u0623\u0648\u0644 \u0648\u0627\u062D\u062F \u0628\u0643\u0628\u0633 \u0627\u0644\u062C\u0631\u0633 (\u0623\u0648 \u062D\u0631\u0641 A / L) \u0628\u064A\u0627\u062E\u062F \u0627\u0644\u0641\u0631\u0635\u0629.",
+    scoringJo: "\u0646\u0642\u0637\u062A\u064A\u0646 \u0644\u0644\u0625\u062C\u0627\u0628\u0629 \u0627\u0644\u0635\u062D! \u0648\u0644\u0648 \u062C\u0627\u0648\u0628\u062A \u063A\u0644\u0637 \u0628\u0646\u0633\u0643\u0631 \u0627\u0644\u062C\u0631\u0633 \u0639\u0644\u064A\u0643 \u0648\u0628\u062A\u0631\u0648\u062D \u0627\u0644\u0641\u0631\u0635\u0629 \u0644\u0644\u0645\u0646\u0627\u0641\u0633.",
+    proTipJo: "\u0644\u0627 \u062A\u0643\u0628\u0633 \u0627\u0644\u062C\u0631\u0633 \u0642\u0628\u0644 \u0645\u0627 \u062A\u0643\u0645\u0644 \u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0633\u0624\u0627\u0644 \u0625\u0644\u0627 \u0625\u0630\u0627 \u0643\u0646\u062A \u0645\u062A\u0623\u0643\u062F 100% \u0639\u0634\u0627\u0646 \u0645\u0627 \u064A\u0631\u0648\u062D \u0639\u0644\u064A\u0643!"
+  },
+  golden: {
+    roundType: "golden",
+    nicknameJo: "\u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u0630\u0647\u0628\u064A\u0629 (\xD72)",
+    howToPlayJo: "\u062C\u0648\u0644\u0629 \u0639\u0627\u062F\u064A\u0629 \u0645\u0646 \u0627\u0644\u0646\u0648\u0639 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 \u0628\u0633 \u0643\u0644 \u0627\u0644\u0646\u0642\u0627\u0637 \u0641\u064A\u0647\u0627 \u0645\u0636\u0631\u0648\u0628\u0629 \u0628\u0640 \xD72 \u0644\u0644\u0639\u0648\u062F\u0629 \u0627\u0644\u0642\u0648\u064A\u0629!",
+    scoringJo: "\u0623\u064A \u0646\u0642\u0637\u0629 \u0628\u062A\u062C\u064A\u0628\u0647\u0627 \u0628\u0647\u0627\u0644\u062C\u0648\u0644\u0629 \u0628\u062A\u062A\u062F\u0628\u0644 \xD72 \u2014 \u0645\u062B\u0644\u0627\u064B \u0627\u0644\u062C\u0631\u0633 \u0628\u0635\u064A\u0631 4 \u0646\u0642\u0627\u0637 \u0648\u0645\u0646 \u0623\u0646\u0627 \u0628\u0635\u064A\u0631 6!",
+    proTipJo: "\u0647\u0627\u064A \u062C\u0648\u0644\u0629 \u0642\u0644\u0628 \u0627\u0644\u0637\u0627\u0648\u0644\u0629! \u0631\u0643\u0651\u0632 \u0641\u064A\u0647\u0627 \u0645\u0646\u064A\u062D \u0648\u0645\u0627 \u062A\u0641\u0631\u0651\u0637 \u0648\u0644\u0627 \u0628\u0646\u0642\u0637\u0629."
+  },
+  bid_challenge: {
+    roundType: "bid_challenge",
+    nicknameJo: "\u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F\u061F",
+    howToPlayJo: "\u0645\u0631\u062D\u0644\u0629 \u0645\u0632\u0627\u064A\u062F\u0629: \u0643\u0644 \u0641\u0631\u064A\u0642 \u0628\u0631\u0641\u0639 \u0627\u0644\u0639\u062F\u062F \u0627\u0644\u0644\u064A \u0628\u0642\u062F\u0631 \u064A\u0630\u0643\u0631\u0647 \u0628\u064030 \u062B\u0627\u0646\u064A\u0629 \u0644\u062D\u062F \u0645\u0627 \u0648\u0627\u062D\u062F \u064A\u0642\u0648\u0644 \xAB\u0628\u062A\u062D\u062F\u0651\u0627\u0643!\xBB",
+    scoringJo: "\u0645\u0627 \u0641\u064A \u0646\u0642\u0627\u0637 \u0644\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u0646\u0641\u0633\u0647\u0627\u061B \u0625\u0630\u0627 \u0627\u0644\u0641\u0627\u0626\u0632 \u0628\u0627\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u062C\u0627\u0628 \u0627\u0644\u0639\u062F\u062F \u0628\u0623\u062E\u062F 3 \u0646\u0642\u0627\u0637\u060C \u0648\u0625\u0630\u0627 \u0641\u0634\u0644 \u0627\u0644\u0645\u0646\u0627\u0641\u0633 \u0628\u0623\u062E\u062F \u0646\u0642\u0637\u062A\u064A\u0646!",
+    proTipJo: "\u0627\u0631\u0641\u0639 \u0628\u062D\u0643\u0645\u0629! \u0644\u0648 \u062E\u0635\u0645\u0643 \u0628\u0627\u0644\u063A \u0628\u0627\u0644\u0639\u062F\u062F\u060C \u0627\u0643\u0628\u0633 \xAB\u0628\u062A\u062D\u062F\u0651\u0627\u0643!\xBB \u0648\u062E\u0644\u064A\u0647 \u064A\u062A\u0648\u0631\u0637 \u0628\u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629."
+  }
+};
+var BOT_SKILL_PROFILES = {
+  relaxed: {
+    skill: "relaxed",
+    labelAr: "\u0646\u0634\u0645\u064A \u0627\u0644\u0647\u0627\u062F\u064A (\u0633\u0647\u0644)",
+    accuracy: 0.55,
+    buzzDelayMsRange: [2800, 4400],
+    thinkDelayMsRange: [2e3, 3200],
+    bidConfidenceRatio: 0.45
+  },
+  balanced: {
+    skill: "balanced",
+    labelAr: "\u0646\u0634\u0645\u064A \u0627\u0644\u0645\u062A\u0648\u0627\u0632\u0646 (\u0645\u062A\u0648\u0633\u0637)",
+    accuracy: 0.74,
+    buzzDelayMsRange: [1900, 3e3],
+    thinkDelayMsRange: [1400, 2400],
+    bidConfidenceRatio: 0.65
+  },
+  fierce: {
+    skill: "fierce",
+    labelAr: "\u0646\u0634\u0645\u064A \u0627\u0644\u0646\u0627\u0631\u064A (\u0635\u0639\u0628)",
+    accuracy: 0.9,
+    buzzDelayMsRange: [1100, 2e3],
+    thinkDelayMsRange: [1e3, 1700],
+    bidConfidenceRatio: 0.85
+  }
+};
+var BANTER_BANK = {
+  match_start: [
+    "\u0647\u0644\u0627 \u0628\u0627\u0644\u0646\u0634\u0627\u0645\u0649! \u0623\u0646\u0627 \u0646\u0634\u0645\u064A \u0648\u062C\u0627\u0647\u0632 \u0644\u0644\u062A\u062D\u062F\u064A\u060C \u064A\u0644\u0627 \u0646\u0641\u0631\u062C\u064A\u0647\u0645 \u0645\u064A\u0646 \u0642\u062F\u0651\u0647\u0627!",
+    "\u062D\u064A\u0651 \u0627\u0644\u0644\u0647 \u0627\u0644\u0634\u0628\u0627\u0628! \u0627\u0644\u0642\u0647\u0648\u0629 \u062C\u0627\u0647\u0632\u0629 \u0648\u0627\u0644\u0645\u0646\u0627\u0641\u0633\u0629 \u0639\u0627\u0644\u0646\u0627\u0631\u060C \u064A\u0644\u0627 \u0646\u0628\u0644\u0651\u0634!",
+    "\u0645\u0633\u0627\u0621 \u0627\u0644\u0647\u0645\u0629! \u0634\u062F\u0651\u0648\u0627 \u0627\u0644\u0623\u062D\u0632\u0645\u0629 \u0644\u0623\u0646\u0648 \u0627\u0644\u064A\u0648\u0645 \u0627\u0644\u0644\u0639\u0628 \u063A\u064A\u0631 \u0634\u0643\u0644!"
+  ],
+  bot_buzz: [
+    "\u0643\u0628\u0633\u062A \u0627\u0644\u062C\u0631\u0633 \u0642\u0628\u0644\u0643! \u0627\u0633\u062A\u0639\u062F \u0644\u0644\u0625\u062C\u0627\u0628\u0629 \u064A\u0627 \u0643\u0628\u064A\u0631!",
+    "\u0623\u0633\u0631\u0639 \u0645\u0646 \u0627\u0644\u0628\u0631\u0642! \u0627\u0644\u062C\u0631\u0633 \u0639\u0646\u062F\u064A \u0647\u0627\u0644\u0645\u0631\u0629!",
+    "\u0639\u0627\u0644\u0633\u0631\u064A\u0639! \u0633\u0645\u0639\u062A \u0627\u0644\u0633\u0624\u0627\u0644 \u0648\u0644\u062D\u0642\u062A \u0627\u0644\u062C\u0631\u0633!"
+  ],
+  bot_correct: [
+    "\u0648\u0627\u0644\u0644\u0647 \u062C\u0628\u062A\u0647\u0627 \u0635\u062D! \u0643\u064A\u0641 \u0627\u0644\u0623\u062F\u0627\u0621 \u0628\u0633\u061F",
+    "\u0633\u0647\u0644\u0629 \u0647\u0627\u064A \u0639\u0627\u0644\u0646\u0634\u0627\u0645\u0649! \u064A\u0644\u0627 \u0639\u0627\u0644\u0644\u064A \u0628\u0639\u062F\u0647!",
+    "\u0645\u0632\u0628\u0648\u0637\u0629 \u0645\u064A\u0629 \u0628\u0627\u0644\u0645\u064A\u0629! \u0634\u062F\u0651 \u062D\u064A\u0644\u0643 \u0644\u0627 \u062A\u062A\u0623\u062E\u0631!",
+    "\u0643\u0641\u0648! \u0646\u0642\u0637\u0629 \u062D\u0644\u0648\u0629 \u0628\u062A\u0641\u062A\u062D \u0627\u0644\u0646\u0641\u0633!"
+  ],
+  bot_wrong: [
+    "\u0623\u0648\u0648\u0648\u0641 \u0648\u0627\u0644\u0644\u0647 \u0632\u0644\u0651\u062A \u0645\u0646\u064A! \u0627\u0644\u062D\u0642 \u0639\u0644\u064A\u0643 \u0631\u0628\u0643\u062A\u0646\u064A!",
+    "\u0631\u0627\u062D\u062A \u0639\u0644\u064A\u0651 \u0647\u0627\u0644\u0645\u0631\u0629\u060C \u0641\u0631\u0635\u062A\u0643 \u062A\u0639\u0648\u0651\u0636 \u064A\u0627 \u0628\u0637\u0644!",
+    "\u062A\u0644\u0628\u0651\u0643\u062A \u0634\u0648\u064A \u0628\u0627\u0644\u0644\u062D\u0638\u0629 \u0627\u0644\u0623\u062E\u064A\u0631\u0629\u060C \u064A\u0644\u0627 \u0645\u0633\u0627\u0645\u062D \u062D\u0627\u0644\u064A!"
+  ],
+  bot_bid_raise: [
+    "\u0628\u0631\u0641\u0639 \u0627\u0644\u0633\u0642\u0641! \u0642\u062F\u0651\u0647\u0627 \u0648\u0642\u062F\u0648\u062F \u0625\u0646 \u0634\u0627\u0621 \u0627\u0644\u0644\u0647!",
+    "\u0644\u0627\u060C \u0623\u0646\u0627 \u0628\u0632\u064A\u062F \u0639\u0644\u064A\u0643 \u2014 \u0648\u0631\u0651\u064A\u0646\u064A \u0634\u0637\u0627\u0631\u062A\u0643!",
+    "\u0639\u0644\u0649 \u0628\u0631\u0643\u0629 \u0627\u0644\u0644\u0647\u060C \u0628\u0646\u0632\u0648\u0651\u062F \u0627\u0644\u0631\u0642\u0645!"
+  ],
+  bot_bid_challenge: [
+    "\u0628\u062A\u062D\u062F\u0651\u0627\u0643 \u064A\u0627 \u0632\u0644\u0645\u0629! \u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629 \u0628\u062A\u062D\u0643\u0645 \u0628\u064A\u0646\u0646\u0627!",
+    "\u0643\u062B\u064A\u0631 \u0647\u064A\u0643! \u0628\u062A\u062D\u062F\u0651\u0627\u0643 \u062A\u062C\u064A\u0628\u0647\u0645 \u0642\u0628\u0644 \u0645\u0627 \u064A\u062E\u0644\u0635 \u0627\u0644\u0648\u0642\u062A!",
+    "\u064A\u0644\u0627 \u0648\u0631\u0651\u064A\u0646\u0627 \u0647\u0645\u0651\u062A\u0643! \u0628\u062A\u062D\u062F\u0651\u0627\u0643!"
+  ],
+  bot_thinking_clue: [
+    "\u062E\u0644\u0651\u064A\u0646\u064A \u0623\u0634\u0648\u0641 \u0627\u0644\u062A\u0644\u0645\u064A\u062D \u0627\u0644\u0644\u064A \u0628\u0639\u062F\u0647 \u0639\u0634\u0627\u0646 \u0623\u0642\u0637\u0639 \u0627\u0644\u0634\u0643 \u0628\u0627\u0644\u064A\u0642\u064A\u0646...",
+    "\u0627\u0644\u0627\u0633\u0645 \u0642\u0631\u064A\u0628 \u0639\u0644\u0649 \u0628\u0627\u0644\u064A\u060C \u0639\u0637\u064A\u0646\u064A \u0643\u0645\u0627\u0646 \u062A\u0644\u0645\u064A\u062D!"
+  ],
+  player_correct: [
+    "\u0648\u0627\u0644\u0644\u0647 \u0625\u0646\u0643 \u0643\u0641\u0648! \u0625\u062C\u0627\u0628\u0629 \u0645\u0631\u062A\u0628\u0629!",
+    "\u0623\u0628\u062F\u0639\u062A \u064A\u0627 \u0646\u0634\u0645\u064A! \u0646\u0642\u0637\u0629 \u0645\u0633\u062A\u062D\u0642\u0629!",
+    "\u064A\u0627 \u0633\u0644\u0627\u0645 \u0639\u0644\u064A\u0643! \u0645\u0627 \u062E\u0644\u064A\u062A\u0644\u064A \u0645\u062C\u0627\u0644!"
+  ],
+  player_wrong: [
+    "\u0642\u0631\u064A\u0628\u0629 \u0648\u0627\u0644\u0644\u0647! \u0627\u0644\u0645\u0631\u0629 \u0627\u0644\u062C\u0627\u064A\u0629 \u0628\u062A\u062C\u064A\u0628\u0647\u0627!",
+    "\u0631\u0627\u062D\u062A \u0628\u0627\u0644\u0645\u0644\u0651\u064A\u060C \u0644\u0627 \u062A\u0648\u0642\u0641 \u0643\u0645\u0651\u0644!",
+    "\u0647\u0633\u0627 \u062F\u0648\u0631\u064A \u0622\u062E\u0630 \u0627\u0644\u0635\u062F\u0627\u0631\u0629 \u0645\u0646\u0643!"
+  ],
+  lead_change: [
+    "\u0627\u0646\u0642\u0644\u0628\u062A \u0627\u0644\u0645\u0648\u0627\u0632\u064A\u0646! \u0627\u0644\u0644\u0639\u0628\u0629 \u0648\u0644\u0639\u062A \u0646\u0627\u0631!",
+    "\u062A\u0628\u062F\u0651\u0644\u062A \u0627\u0644\u0635\u062F\u0627\u0631\u0629 \u064A\u0627 \u062C\u0645\u0627\u0639\u0629 \u2014 \u0643\u0644 \u062B\u0627\u0646\u064A\u0629 \u0628\u062A\u0641\u0631\u0642!"
+  ],
+  match_win_bot: [
+    "\u0641\u0627\u0632 \u0646\u0634\u0645\u064A! \u0628\u0633 \u0648\u0627\u0644\u0644\u0647 \u0644\u0639\u0628\u062A\u0643 \u0628\u062A\u0631\u0641\u0639 \u0627\u0644\u0631\u0627\u0633\u060C \u0628\u0646\u0639\u064A\u062F\u0647\u0627!",
+    "\u0643\u0641\u0648 \u0639\u0644\u064A\u0643 \u0645\u0646\u0627\u0641\u0633\u0629 \u0642\u0648\u064A\u0629! \u0647\u0627\u0644\u0645\u0631\u0629 \u0627\u0644\u062D\u0638 \u0627\u0628\u062A\u0633\u0645 \u0644\u0644\u0646\u0634\u0627\u0645\u0649!"
+  ],
+  match_win_player: [
+    "\u0623\u0644\u0641 \u0645\u0628\u0631\u0648\u0643 \u064A\u0627 \u0628\u0637\u0644! \u0648\u0627\u0644\u0644\u0647 \u063A\u0644\u0628\u062A\u0646\u064A \u0639\u0646 \u062C\u062F\u0627\u0631\u0629!",
+    "\u064A\u0633\u0639\u062F \u062F\u064A\u0646\u0643 \u0634\u0648 \u0645\u0628\u062F\u0639! \u062A\u0633\u062A\u0627\u0647\u0644 \u0627\u0644\u0643\u0623\u0633 \u0648\u0627\u0644\u0644\u0647!"
+  ],
+  match_tie: [
+    "\u062A\u0639\u0627\u062F\u0644! \u0648\u0644\u0627 \u0648\u0627\u062D\u062F \u0641\u064A\u0646\u0627 \u0631\u0627\u0636\u064A \u064A\u0641\u0631\u0651\u0637 \u2014 \u062C\u0627\u0647\u0632 \u0644\u0643\u0633\u0631 \u0627\u0644\u062A\u0639\u0627\u062F\u0644\u061F"
+  ]
+};
+function pickJordanianBanter(event, rng = Math.random) {
+  const options = BANTER_BANK[event];
+  const idx = Math.min(options.length - 1, Math.floor(rng() * options.length));
+  return options[idx];
+}
+function computeBotDelayMs(skill, kind, rng = Math.random) {
+  const profile = BOT_SKILL_PROFILES[skill] ?? BOT_SKILL_PROFILES.balanced;
+  if (kind === "buzz") {
+    const [min2, max2] = profile.buzzDelayMsRange;
+    return Math.round(min2 + rng() * (max2 - min2));
+  }
+  if (kind === "sprint") {
+    const [min2, max2] = profile.thinkDelayMsRange;
+    return Math.round(Math.max(850, min2 * 0.72) + rng() * ((max2 - min2) * 0.6));
+  }
+  if (kind === "bid") {
+    return Math.round(950 + rng() * 750);
+  }
+  const [min, max] = profile.thinkDelayMsRange;
+  return Math.round(min + rng() * (max - min));
+}
+function getEffectiveAccuracy(skill, question) {
+  const base = (BOT_SKILL_PROFILES[skill] ?? BOT_SKILL_PROFILES.balanced).accuracy;
+  const diffPenalty = question.difficulty === "hard" ? -0.1 : question.difficulty === "easy" ? 0.08 : 0;
+  return Math.min(0.95, Math.max(0.32, base + diffPenalty));
+}
+function buildWrongChoiceIndex(question, rng) {
+  const total = question.options.length;
+  if (total <= 1) return 0;
+  const correctIdx = resolveCorrectOptionIndex(question);
+  const wrongIndices = [];
+  for (let i = 0; i < total; i++) {
+    if (i !== correctIdx) wrongIndices.push(i);
+  }
+  if (wrongIndices.length === 0) return 0;
+  return wrongIndices[Math.floor(rng() * wrongIndices.length)];
+}
+function resolveCorrectOptionIndex(question) {
+  if (typeof question.correctIndex === "number" && question.correctIndex >= 0 && question.correctIndex < question.options.length) {
+    return question.correctIndex;
+  }
+  const normalizedAnswers = new Set(question.acceptableAnswers.map(normalizeArabicText).filter(Boolean));
+  const found = question.options.findIndex((opt) => normalizedAnswers.has(normalizeArabicText(opt)));
+  return found >= 0 ? found : 0;
+}
+function decideBotTurnAction(params) {
+  const { session, botTeamIndex, skill, rng = Math.random } = params;
+  const q = session.currentQuestion;
+  if (session.phase !== "playing" || !q || session.answerRevealed || session.memoryPhase === "memorize") {
+    return { type: "none" };
+  }
+  const round = session.rounds[session.currentRoundIndex];
+  const effectiveType = round?.roundType === "golden" && round.goldenTargetType ? round.goldenTargetType : q.roundType;
+  if (effectiveType === "bid_challenge" && session.bidState) {
+    const bid = session.bidState;
+    if (bid.phase === "bidding") {
+      if (bid.turnTeamIndex !== botTeamIndex) {
+        return { type: "none" };
+      }
+      const profile = BOT_SKILL_PROFILES[skill] ?? BOT_SKILL_PROFILES.balanced;
+      const comfortableMax = Math.max(1, Math.round(bid.maxPossible * profile.bidConfidenceRatio));
+      if (bid.currentBid >= bid.maxPossible || bid.currentBid >= comfortableMax && rng() < 0.78) {
+        return {
+          type: "bid_challenge",
+          teamIndex: botTeamIndex,
+          banterMood: "tease",
+          banterText: pickJordanianBanter("bot_bid_challenge", rng)
+        };
+      }
+      const jump = skill === "fierce" && bid.currentBid + 2 <= comfortableMax && rng() < 0.35 ? 2 : 1;
+      const targetBid = Math.min(bid.maxPossible, bid.currentBid + jump);
+      return {
+        type: "bid_raise",
+        teamIndex: botTeamIndex,
+        targetBid,
+        banterMood: "hype",
+        banterText: pickJordanianBanter("bot_bid_raise", rng)
+      };
+    }
+    if (bid.phase === "executing" && bid.bidderTeamIndex === botTeamIndex && session.timerRunning && session.timerRemainingSec > 0) {
+      const usedSet = new Set(bid.acceptedAnswers.map(normalizeChallengeItem).filter(Boolean));
+      const remainingValid = q.acceptableAnswers.filter((ans) => {
+        const norm = normalizeChallengeItem(ans);
+        return norm && !usedSet.has(norm);
+      });
+      const accuracy2 = getEffectiveAccuracy(skill, q);
+      const maxBotCanRemember = Math.max(
+        1,
+        Math.min(remainingValid.length + bid.acceptedAnswers.length, Math.ceil(bid.maxPossible * accuracy2))
+      );
+      if (remainingValid.length === 0 || bid.acceptedAnswers.length >= bid.currentBid || bid.acceptedAnswers.length >= maxBotCanRemember && rng() < 0.65) {
+        return {
+          type: "bid_complete",
+          teamIndex: botTeamIndex,
+          banterMood: bid.acceptedAnswers.length >= bid.currentBid ? "happy" : "tease",
+          banterText: bid.acceptedAnswers.length >= bid.currentBid ? "\u062C\u0628\u0646\u0627\u0647\u0627 \u0628\u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629! \u0643\u0641\u0648!" : "\u0647\u0630\u0627 \u0627\u0644\u0644\u064A \u0637\u0644\u0639 \u0645\u0639\u064A \u0628\u0627\u0644\u0648\u0642\u062A \u0627\u0644\u0645\u062A\u0628\u0642\u064A!"
+        };
+      }
+      const chosen = remainingValid[Math.floor(rng() * remainingValid.length)];
+      return {
+        type: "bid_record_answer",
+        teamIndex: botTeamIndex,
+        answerText: chosen,
+        isCorrect: true,
+        banterMood: "thinking",
+        banterText: `\u0628\u0642\u0648\u0644: ${chosen}`
+      };
+    }
+    return { type: "none" };
+  }
+  if (!session.timerRunning || session.timerRemainingSec <= 0) {
+    return { type: "none" };
+  }
+  if (effectiveType === "buzzer" || q.roundType === "buzzer") {
+    if (session.buzzedTeamIndex === null) {
+      if (session.failedBuzzTeams.includes(botTeamIndex)) {
+        return { type: "none" };
+      }
+      return {
+        type: "buzz",
+        teamIndex: botTeamIndex,
+        banterMood: "hype",
+        banterText: pickJordanianBanter("bot_buzz", rng)
+      };
+    }
+    if (session.buzzedTeamIndex !== botTeamIndex) {
+      return { type: "none" };
+    }
+  } else if (session.activeTeamIndex !== botTeamIndex) {
+    return { type: "none" };
+  }
+  if (effectiveType === "who_am_i" && session.revealedClueCount < q.clues.length) {
+    const eagerGuessChance = skill === "fierce" ? 0.62 : skill === "balanced" ? 0.35 : 0.18;
+    if (rng() > eagerGuessChance) {
+      return {
+        type: "reveal_next_clue",
+        teamIndex: botTeamIndex,
+        banterMood: "thinking",
+        banterText: pickJordanianBanter("bot_thinking_clue", rng)
+      };
+    }
+  }
+  const accuracy = getEffectiveAccuracy(skill, q);
+  const willAnswerCorrectly = rng() < accuracy;
+  if (q.options.length > 0 && (effectiveType === "multiple_choice" || effectiveType === "true_false" || effectiveType === "odd_one_out")) {
+    const choiceIdx = willAnswerCorrectly ? resolveCorrectOptionIndex(q) : buildWrongChoiceIndex(q, rng);
+    return {
+      type: "answer",
+      teamIndex: botTeamIndex,
+      submitted: choiceIdx,
+      expectedCorrect: willAnswerCorrectly,
+      banterMood: willAnswerCorrectly ? "happy" : "tease",
+      banterText: pickJordanianBanter(willAnswerCorrectly ? "bot_correct" : "bot_wrong", rng)
+    };
+  }
+  if (effectiveType === "order_items") {
+    const correctOrder = q.acceptableAnswers.length >= 2 ? [...q.acceptableAnswers] : [...q.options];
+    if (willAnswerCorrectly || correctOrder.length < 2) {
+      return {
+        type: "answer",
+        teamIndex: botTeamIndex,
+        submitted: correctOrder,
+        expectedCorrect: true,
+        banterMood: "happy",
+        banterText: pickJordanianBanter("bot_correct", rng)
+      };
+    }
+    const swapped = [...correctOrder];
+    [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
+    return {
+      type: "answer",
+      teamIndex: botTeamIndex,
+      submitted: swapped,
+      expectedCorrect: false,
+      banterMood: "tease",
+      banterText: pickJordanianBanter("bot_wrong", rng)
+    };
+  }
+  if (effectiveType === "list_multiple" || effectiveType === "memory") {
+    const pool = q.acceptableAnswers.length > 0 ? q.acceptableAnswers : q.memoryItems;
+    const needed = q.requiredCount ?? (/اذكر\s*(?:خمسة|[5٥])/.test(q.prompt) ? 5 : Math.min(3, Math.max(1, pool.length)));
+    if (willAnswerCorrectly) {
+      const picked = pool.slice(0, needed);
+      return {
+        type: "answer",
+        teamIndex: botTeamIndex,
+        submitted: effectiveType === "memory" && picked.length === 1 ? picked[0] : picked,
+        expectedCorrect: true,
+        banterMood: "happy",
+        banterText: pickJordanianBanter("bot_correct", rng)
+      };
+    }
+    const partial = pool.slice(0, Math.max(1, Math.floor(needed / 2)));
+    return {
+      type: "answer",
+      teamIndex: botTeamIndex,
+      submitted: effectiveType === "memory" ? ["\u0625\u062C\u0627\u0628\u0629 \u063A\u064A\u0631 \u062F\u0642\u064A\u0642\u0629"] : [...partial, "\u062A\u062E\u0645\u064A\u0646 \u063A\u064A\u0631 \u0645\u0624\u0643\u062F"],
+      expectedCorrect: false,
+      banterMood: "tease",
+      banterText: pickJordanianBanter("bot_wrong", rng)
+    };
+  }
+  if (willAnswerCorrectly && q.acceptableAnswers.length > 0) {
+    return {
+      type: "answer",
+      teamIndex: botTeamIndex,
+      submitted: q.acceptableAnswers[0],
+      expectedCorrect: true,
+      banterMood: "happy",
+      banterText: pickJordanianBanter("bot_correct", rng)
+    };
+  }
+  return {
+    type: "answer",
+    teamIndex: botTeamIndex,
+    submitted: "\u0645\u0634 \u0645\u062A\u0623\u0643\u062F \u0648\u0627\u0644\u0644\u0647",
+    expectedCorrect: false,
+    banterMood: "tease",
+    banterText: pickJordanianBanter("bot_wrong", rng)
+  };
+}
+function summarizeLiveSessionForBot(session) {
+  const round = session.rounds[session.currentRoundIndex];
+  const scoreSummary = session.teams.map((t) => `${t.name}: ${t.points} \u0646\u0642\u0637\u0629`).join(" | ");
+  const winInfo = determineWinner(session.teams);
+  const leaderLine = winInfo.isTie ? "\u0627\u0644\u0648\u0636\u0639 \u062D\u0627\u0644\u064A\u0627\u064B \u062A\u0639\u0627\u062F\u0644 \u062D\u0627\u0645\u064A!" : `\u0627\u0644\u0645\u062A\u0635\u062F\u0631 \u062D\u0627\u0644\u064A\u0627\u064B: ${session.teams[winInfo.winnerIndices[0]]?.name}`;
+  const roundType = round?.goldenTargetType ?? session.currentQuestion?.roundType ?? round?.roundType ?? "rapid_fire";
+  const guide = ROUND_JORDANIAN_GUIDES[roundType];
+  const lines = [
+    `\u0648\u0636\u0639 \u0627\u0644\u0645\u0628\u0627\u0631\u0627\u0629 (#${session.code}):`,
+    `\u2022 \u0627\u0644\u0646\u062A\u064A\u062C\u0629: ${scoreSummary} (${leaderLine})`,
+    `\u2022 \u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629: ${session.currentRoundIndex + 1} \u0645\u0646 ${session.rounds.length} \u2014 \xAB${round?.titleAr ?? guide.nicknameJo}\xBB`
+  ];
+  if (session.phase === "vs") {
+    lines.push("\u2022 \u0627\u0644\u0645\u0631\u062D\u0644\u0629: \u0634\u0627\u0634\u0629 \u0627\u0644\u0645\u0648\u0627\u062C\u0647\u0629 (VS) \u2014 \u0627\u0636\u063A\u0637 \xAB\u064A\u0644\u0627 \u0646\u0628\u0644\u0651\u0634!\xBB \u0644\u062A\u062F\u062E\u0644 \u0623\u0648\u0644 \u062C\u0648\u0644\u0629.");
+  } else if (session.phase === "round_intro" || session.phase === "countdown") {
+    lines.push(`\u2022 \u0627\u0644\u0645\u0631\u062D\u0644\u0629: \u0645\u0642\u062F\u0645\u0629 \u0627\u0644\u062C\u0648\u0644\u0629 \u2014 ${guide.howToPlayJo}`);
+  } else if (session.phase === "playing" || session.phase === "paused") {
+    lines.push(`\u2022 \u0627\u0644\u0645\u0624\u0642\u062A \u0627\u0644\u0645\u062A\u0628\u0642\u064A: ${session.timerRemainingSec} \u062B\u0627\u0646\u064A\u0629${session.phase === "paused" ? " (\u0645\u0648\u0642\u0651\u0641 \u0645\u0624\u0642\u062A\u0627\u064B)" : ""}`);
+    if (session.bidState) {
+      lines.push(
+        session.bidState.phase === "bidding" ? `\u2022 \u0627\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u0634\u063A\u0627\u0644\u0629 \u0639\u0644\u0649 ${session.bidState.currentBid} \u0639\u0646\u0627\u0635\u0631 (\u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 ${session.bidState.maxPossible}) \u2014 \u0627\u0644\u062F\u0648\u0631 \u0639\u0644\u0649 ${session.teams[session.bidState.turnTeamIndex]?.name}.` : `\u2022 \u0645\u0631\u062D\u0644\u0629 \u062A\u0646\u0641\u064A\u0630 \xAB\u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F\xBB: ${session.teams[session.bidState.bidderTeamIndex]?.name} \u0644\u0627\u0632\u0645 \u064A\u062C\u064A\u0628 ${session.bidState.currentBid} \u0625\u062C\u0627\u0628\u0627\u062A.`
+      );
+    } else if (roundType === "buzzer") {
+      lines.push(
+        session.buzzedTeamIndex !== null ? `\u2022 \u0627\u0644\u062C\u0631\u0633 \u0645\u0639 ${session.teams[session.buzzedTeamIndex]?.name} \u0627\u0644\u0622\u0646!` : "\u2022 \u0627\u0644\u062C\u0631\u0633 \u0645\u0641\u062A\u0648\u062D! \u0623\u0648\u0644 \u0641\u0631\u064A\u0642 \u0628\u0643\u0628\u0633 \u0628\u0627\u062E\u062F \u0627\u0644\u0641\u0631\u0635\u0629 (\u0646\u0642\u0637\u062A\u0627\u0646)."
+      );
+    } else if (session.memoryPhase === "memorize") {
+      lines.push(`\u2022 \u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u062D\u0641\u0638 (${session.memoryRemainingSec}\u062B) \u2014 \u0627\u062D\u0641\u0638 \u0627\u0644\u0639\u0646\u0627\u0635\u0631 \u0642\u0628\u0644 \u0645\u0627 \u062A\u062E\u062A\u0641\u064A!`);
+    } else {
+      lines.push(`\u2022 \u0627\u0644\u062F\u0648\u0631 \u0627\u0644\u062D\u0627\u0644\u064A: ${session.teams[session.activeTeamIndex]?.name ?? "\u0627\u0644\u0641\u0631\u064A\u0642 \u0627\u0644\u0623\u0648\u0644"}`);
+    }
+    lines.push(`\u2022 \u0646\u0635\u064A\u062D\u0629 \u0646\u0634\u0645\u064A \u0644\u0647\u0627\u0644\u062C\u0648\u0644\u0629: ${guide.proTipJo}`);
+  } else if (session.phase === "round_summary") {
+    lines.push("\u2022 \u062E\u0644\u0635\u062A \u0627\u0644\u062C\u0648\u0644\u0629! \u0627\u0636\u063A\u0637 \xAB\u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u062A\u0627\u0644\u064A\u0629\xBB \u0639\u0634\u0627\u0646 \u062A\u0643\u0645\u0644.");
+  } else if (session.phase === "finished") {
+    lines.push("\u2022 \u0627\u0644\u0645\u0628\u0627\u0631\u0627\u0629 \u0627\u0646\u062A\u0647\u062A! \u062A\u0642\u062F\u0631 \u062A\u0628\u062F\u0623 \u0645\u0628\u0627\u0631\u0627\u0629 \u062C\u062F\u064A\u062F\u0629 \u0623\u0648 \u062A\u0643\u0633\u0631 \u0627\u0644\u062A\u0639\u0627\u062F\u0644 \u0625\u0630\u0627 \u0627\u0644\u0646\u062A\u064A\u062C\u0629 \u0645\u062A\u0633\u0627\u0648\u064A\u0629.");
+  }
+  return lines.join("\n");
+}
+function answerGameQuestionLocally(query, context = {}) {
+  const norm = normalizeArabicText(query);
+  const session = context.session ?? null;
+  const defaultSuggestions = session ? ["\u0634\u0648 \u0648\u0636\u0639 \u0627\u0644\u0645\u0628\u0627\u0631\u0627\u0629\u061F", "\u0627\u0634\u0631\u062D\u0644\u064A \u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629", "\u0643\u064A\u0641 \u0627\u0644\u0646\u0642\u0627\u0637 \u0628\u062A\u0646\u062D\u0633\u0628\u061F", "\u0627\u0639\u0637\u064A\u0646\u064A \u062A\u0643\u062A\u064A\u0643 \u0644\u0644\u0641\u0648\u0632"] : ["\u0634\u0648 \u0643\u0644 \u0627\u0644\u064012 \u062C\u0648\u0644\u0629\u061F", "\u0643\u064A\u0641 \u0627\u0644\u0646\u0642\u0627\u0637 \u0628\u062A\u0646\u062D\u0633\u0628\u061F", "\u0643\u064A\u0641 \u0623\u0644\u0639\u0628 \u0636\u062F \u0646\u0634\u0645\u064A\u061F", "\u0643\u064A\u0641 \u0623\u0631\u0628\u0637 \u0627\u0644\u062A\u0644\u0641\u0632\u064A\u0648\u0646 \u0648\u0627\u0644\u0645\u0648\u0628\u0627\u064A\u0644\u0627\u062A\u061F"];
+  if (session && /(وضع المبار|شو اسوي|ايش اسوي|هسا|الان|الحين|مين فايز|النتيج|تكتيك|نصيحه|نصائح|كيف افوز)/.test(norm)) {
+    return {
+      reply: `\u0647\u0644\u0627 \u0628\u0627\u0644\u0646\u0634\u0645\u064A! \u0634\u0648\u0641 \u0648\u0636\u0639 \u0645\u0628\u0627\u0631\u0627\u062A\u0643\u0645 \u0644\u062D\u0638\u0629 \u0628\u0644\u062D\u0638\u0629:
+
+${summarizeLiveSessionForBot(session)}`,
+      suggestions: defaultSuggestions
+    };
+  }
+  if (session && /(الجوله الحاليه|هاي الجوله|هذه الجوله|اشرحلي الجوله|شو هاي الجوله)/.test(norm)) {
+    const round = session.rounds[session.currentRoundIndex];
+    const rt = round?.goldenTargetType ?? session.currentQuestion?.roundType ?? round?.roundType ?? "rapid_fire";
+    const guide = ROUND_JORDANIAN_GUIDES[rt];
+    return {
+      reply: [
+        `\u062C\u0648\u0644\u062A\u0643\u0645 \u0627\u0644\u062D\u0627\u0644\u064A\u0629 \u0647\u064A \xAB${guide.nicknameJo}\xBB${round?.roundType === "golden" ? " (\u0645\u0636\u0627\u0639\u0641\u0629 \u0630\u0647\u0628\u064A\u0629 \xD72!)" : ""}:`,
+        `\u2022 \u0643\u064A\u0641 \u062A\u0646\u0644\u0639\u0628: ${guide.howToPlayJo}`,
+        `\u2022 \u0627\u0644\u0646\u0642\u0627\u0637: ${guide.scoringJo}`,
+        `\u2022 \u0633\u0631\u0651 \u0646\u0634\u0645\u064A: ${guide.proTipJo}`
+      ].join("\n"),
+      suggestions: defaultSuggestions
+    };
+  }
+  const roundMatchRules = [
+    ["rapid_fire", /الرشاش|سريع/],
+    ["bid_challenge", /مين يزود|يزود|مزايد/],
+    ["who_am_i", /من انا|تلميح|ادله/],
+    ["buzzer", /الجرس|مواجهه بالجرس/],
+    ["golden", /الذهبيه|ذهبيه|مضاعف|دبل/],
+    ["memory", /الذاكره|ذاكره|حفظ/],
+    ["order_items", /رتب|ترتيب/],
+    ["odd_one_out", /المختلف|الشاذ/],
+    ["list_multiple", /اذكر ثلاث|اذكر خمس|تعداد/],
+    ["true_false", /صح او خطا|صح وخطا/],
+    ["multiple_choice", /اختيار من متعدد|خيارات/],
+    ["fill_blank", /اكمل الفراغ|فراغ/]
+  ];
+  for (const [rt, pattern] of roundMatchRules) {
+    if (pattern.test(norm) && !/(كل الجولات|كل ال|12 جوله|جميع الجولات)/.test(norm)) {
+      const g = ROUND_JORDANIAN_GUIDES[rt];
+      return {
+        reply: [
+          `\u064A\u0627 \u0633\u064A\u062F\u064A \u0647\u0627\u064A \u0643\u0644 \u062A\u0641\u0627\u0635\u064A\u0644 \u062C\u0648\u0644\u0629 \xAB${g.nicknameJo}\xBB:`,
+          `\u2022 \u0627\u0644\u0644\u0639\u0628: ${g.howToPlayJo}`,
+          `\u2022 \u0627\u0644\u0646\u0642\u0627\u0637: ${g.scoringJo}`,
+          `\u2022 \u0646\u0635\u064A\u062D\u0629 \u0646\u0634\u0645\u064A: ${g.proTipJo}`
+        ].join("\n"),
+        suggestions: defaultSuggestions
+      };
+    }
+  }
+  if (/(كل الجولات|جميع الجولات|انواع الجولات|12|اللعبه كلها|اشرحلي اللعبه|كيف تنلعب)/.test(norm)) {
+    const list = ALL_ROUND_TYPES.map(
+      (rt, idx) => `${idx + 1}. ${ROUND_JORDANIAN_GUIDES[rt].nicknameJo}: ${ROUND_RULES[rt].shortDescAr}`
+    ).join("\n");
+    return {
+      reply: `\u064A\u0627 \u0647\u0644\u0627 \u0628\u064A\u0643 \u0641\u064A \xAB\u062A\u062D\u062F\u0651\u064A \u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629\xBB! \u0627\u0644\u0644\u0639\u0628\u0629 \u0641\u064A\u0647\u0627 12 \u0646\u0648\u0639 \u062C\u0648\u0644\u0629 \u062D\u0645\u0627\u0633\u064A\u0629 \u0628\u062A\u062E\u062A\u0627\u0631 \u0645\u0646\u0647\u0645 \u0627\u0644\u0644\u064A \u0628\u062F\u0643 \u0625\u064A\u0627\u0647:
+
+${list}
+
+\u0627\u062E\u062A\u0627\u0631 \u0623\u064A \u062C\u0648\u0644\u0629 \u0648\u0623\u0646\u0627 \u0628\u0634\u0631\u062D\u0644\u0643 \u062A\u0643\u062A\u064A\u0643\u0647\u0627 \u0628\u0627\u0644\u062A\u0641\u0635\u064A\u0644!`,
+      suggestions: ["\u0627\u0634\u0631\u062D\u0644\u064A \u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F", "\u0627\u0634\u0631\u062D\u0644\u064A \u0645\u0646 \u0623\u0646\u0627", "\u0643\u064A\u0641 \u0627\u0644\u0646\u0642\u0627\u0637 \u0628\u062A\u0646\u062D\u0633\u0628\u061F", "\u0643\u064A\u0641 \u0623\u0644\u0639\u0628 \u0636\u062F \u0646\u0634\u0645\u064A\u061F"]
+    };
+  }
+  if (/(نقاط|حساب|بتنحسب|بونص|سلسله|تعادل|خصم)/.test(norm)) {
+    return {
+      reply: [
+        "\u0646\u0638\u0627\u0645 \u0627\u0644\u0646\u0642\u0627\u0637 \u0641\u064A \u062A\u062D\u062F\u0651\u064A \u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629 \u0639\u0627\u062F\u0644 \u0648\u0645\u0644\u064A\u0627\u0646 \u062D\u0645\u0627\u0633:",
+        "\u2022 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0639\u0627\u062F\u064A\u0629 (\u0627\u0644\u0631\u0634\u0627\u0634\u060C \u0627\u062E\u062A\u064A\u0627\u0631 \u0645\u062A\u0639\u062F\u062F\u060C \u0635\u062D/\u062E\u0637\u0623\u060C \u0641\u0631\u0627\u063A\u060C \u0645\u062E\u062A\u0644\u0641\u060C \u062A\u0631\u062A\u064A\u0628): \u0646\u0642\u0637\u0629 \u0648\u062D\u062F\u0629 (+1 \u0628\u0648\u0646\u0635 \u0643\u0644 3 \u0625\u062C\u0627\u0628\u0627\u062A \u0635\u062D \u0648\u0631\u0627 \u0628\u0639\u0636).",
+        "\u2022 \u0645\u0646 \u0623\u0646\u0627\u061F: \u0645\u0646 \u0627\u0644\u062F\u0644\u064A\u0644 \u0627\u0644\u0623\u0648\u0644 3 \u0646\u0642\u0627\u0637\u060C \u0627\u0644\u062B\u0627\u0646\u064A \u0646\u0642\u0637\u062A\u0627\u0646\u060C \u0627\u0644\u062B\u0627\u0644\u062B \u0646\u0642\u0637\u0629.",
+        "\u2022 \u0627\u0644\u0645\u0648\u0627\u062C\u0647\u0629 \u0628\u0627\u0644\u062C\u0631\u0633: \u0646\u0642\u0637\u062A\u0627\u0646 \u0644\u0644\u0625\u062C\u0627\u0628\u0629 \u0627\u0644\u0635\u062D (\u0648\u0628\u062E\u064A\u0627\u0631 \u0627\u0644\u0645\u0634\u0631\u0641 \u0625\u0645\u0627 \u0627\u0646\u062A\u0642\u0627\u0644 \u0627\u0644\u0641\u0631\u0635\u0629 \u0623\u0648 \u062E\u0635\u0645 \u0646\u0642\u0637\u0629 \u0639\u0646\u062F \u0627\u0644\u062E\u0637\u0623).",
+        "\u2022 \u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F\u061F: \u0627\u0644\u0641\u0627\u0626\u0632 \u0628\u0627\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u0625\u0630\u0627 \u062C\u0627\u0628 \u0627\u0644\u0639\u062F\u062F \u062E\u0644\u0627\u0644 30\u062B \u0628\u0627\u062E\u062F 3 \u0646\u0642\u0627\u0637\u060C \u0648\u0625\u0630\u0627 \u0641\u0634\u0644 \u0628\u0627\u062E\u062F \u0627\u0644\u062E\u0635\u0645 \u0646\u0642\u0637\u062A\u064A\u0646.",
+        "\u2022 \u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u0630\u0647\u0628\u064A\u0629: \u0628\u062A\u0636\u0627\u0639\u0641 \u0643\u0644 \u0646\u0642\u0627\u0637 \u0627\u0644\u062C\u0648\u0644\u0629 \xD72!",
+        "\u2022 \u0625\u0630\u0627 \u062E\u0644\u0635\u062A \u0627\u0644\u0645\u0628\u0627\u0631\u0627\u0629 \u062A\u0639\u0627\u062F\u0644\u060C \u0628\u062A\u0642\u062F\u0631\u0648\u0627 \u062A\u0644\u0639\u0628\u0648\u0627 \u062C\u0648\u0644\u0629 \u0643\u0633\u0631 \u062A\u0639\u0627\u062F\u0644 \u062D\u0627\u0633\u0645\u0629 \u0628\u0627\u0644\u062C\u0631\u0633!"
+      ].join("\n"),
+      suggestions: defaultSuggestions
+    };
+  }
+  if (/(ضد نشمي|ضد البوت|العب لحالي|فردي|بوت|اتحداك|تحدى نشمي)/.test(norm)) {
+    return {
+      reply: [
+        "\u062A\u0642\u062F\u0631 \u062A\u062A\u062D\u062F\u0651\u0627\u0646\u064A \u0628\u0623\u064A \u0648\u0642\u062A! \u0639\u0646\u062F\u064A 3 \u0645\u0633\u062A\u0648\u064A\u0627\u062A: \u0647\u0627\u062F\u064A (\u0633\u0647\u0644)\u060C \u0645\u062A\u0648\u0627\u0632\u0646 (\u0645\u062A\u0648\u0633\u0637)\u060C \u0648\u0646\u0627\u0631\u064A (\u0635\u0639\u0628).",
+        "\u2022 \u0645\u0646 \u0627\u0644\u0635\u0641\u062D\u0629 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629 \u0627\u0636\u063A\u0637 \xAB\u062A\u062D\u062F\u0651\u0649 \u0646\u0634\u0645\u064A\xBB \u0623\u0648 \u0645\u0646 \u0635\u0641\u062D\u0629 \u0627\u0644\u0625\u0639\u062F\u0627\u062F \u0627\u062E\u062A\u0627\u0631 \xAB\u0636\u062F \u0627\u0644\u0628\u0648\u062A (\u0646\u0634\u0645\u064A)\xBB.",
+        "\u2022 \u0631\u062D \u0623\u0644\u0639\u0628 \u0642\u062F\u0627\u0645\u0643 \u0628\u0643\u0644 \u0627\u0644\u064012 \u062C\u0648\u0644\u0629: \u0623\u0632\u0627\u064A\u062F \u0639\u0644\u064A\u0643 \u0628\u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F\u060C \u0623\u0633\u0628\u0642\u0643 \u0639\u0627\u0644\u062C\u0631\u0633\u060C \u0648\u0623\u0631\u062F \u0639\u0644\u064A\u0643 \u0628\u0627\u0644\u0644\u0647\u062C\u0629 \u0627\u0644\u0623\u0631\u062F\u0646\u064A\u0629 \u0644\u062D\u0638\u0629 \u0628\u0644\u062D\u0638\u0629!"
+      ].join("\n"),
+      suggestions: ["\u0634\u0648 \u0643\u0644 \u0627\u0644\u064012 \u062C\u0648\u0644\u0629\u061F", "\u0643\u064A\u0641 \u0627\u0644\u0646\u0642\u0627\u0637 \u0628\u062A\u0646\u062D\u0633\u0628\u061F", "\u0627\u0642\u062A\u0631\u062D\u0644\u064A \u0645\u0628\u0627\u0631\u0627\u0629"]
+    };
+  }
+  if (/(تلفزيون|بروجيكتور|شاشه الجمهور|موبايل|هاتف|مشرف|جرس الهاتف|كود|qr)/.test(norm)) {
+    return {
+      reply: [
+        "\u0644\u0648 \u0628\u062F\u0643\u0645 \u062A\u0644\u0639\u0628\u0648\u0627 \u062C\u0645\u0627\u0639\u0629 \u0628\u0627\u0644\u0628\u064A\u062A \u0623\u0648 \u0628\u0627\u0644\u0645\u0633\u062C\u062F \u0645\u0639 \u0634\u0627\u0634\u0629 \u0639\u0631\u0636 \u0648\u0645\u0648\u0628\u0627\u064A\u0644\u0627\u062A:",
+        "1. \u0645\u0646 \u0635\u0641\u062D\u0629 \xAB\u062C\u0647\u0651\u0632 \u0627\u0644\u062A\u062D\u062F\u0651\u064A\xBB\u060C \u0627\u062E\u062A\u0627\u0631 \xAB\u062A\u062D\u0643\u0645 \u0645\u0646 \u0627\u0644\u0647\u0627\u062A\u0641\xBB \u0639\u0634\u0627\u0646 \u062A\u0641\u062A\u062D \u0644\u0648\u062D\u0629 \u0627\u0644\u062D\u0643\u0645 \u0639\u0644\u0649 \u0645\u0648\u0628\u0627\u064A\u0644 \u0627\u0644\u0645\u0634\u0631\u0641.",
+        "2. \u0645\u0646 \u0644\u0648\u062D\u0629 \u0627\u0644\u062D\u0643\u0645\u060C \u0627\u0646\u0633\u062E \u0631\u0627\u0628\u0637 \xAB\u0634\u0627\u0634\u0629 \u0627\u0644\u062C\u0645\u0647\u0648\u0631\xBB \u0623\u0648 \u0627\u0641\u062A\u062D\u0647\u0627 \u0639\u0644\u0649 \u0627\u0644\u062A\u0644\u0641\u0632\u064A\u0648\u0646/\u0627\u0644\u0628\u0631\u0648\u062C\u064A\u0643\u062A\u0648\u0631 (\u0627\u0644\u062C\u0648\u0627\u0628 \u0628\u0636\u0644 \u0645\u062E\u0641\u064A \u0639\u0646 \u0627\u0644\u062C\u0645\u0647\u0648\u0631 \u0644\u062D\u062F \u0645\u0627 \u062A\u0643\u0634\u0641\u0647!).",
+        "3. \u0648\u0632\u0651\u0639 QR \u062C\u0631\u0633 \u0627\u0644\u0641\u0631\u064A\u0642\u064A\u0646 \u0639\u0634\u0627\u0646 \u0643\u0644 \u0641\u0631\u064A\u0642 \u064A\u0636\u063A\u0637 \u0627\u0644\u062C\u0631\u0633 \u0623\u0648 \u064A\u062C\u0627\u0648\u0628 \u0627\u0644\u0627\u062E\u062A\u064A\u0627\u0631\u0627\u062A \u0645\u0646 \u0645\u0648\u0628\u0627\u064A\u0644\u0647 \u0645\u0628\u0627\u0634\u0631\u0629!"
+      ].join("\n"),
+      suggestions: defaultSuggestions
+    };
+  }
+  if (/(درس|pdf|ملف|ذكاء|تكرار|ما بتتكرر|بنك|اسئله)/.test(norm)) {
+    const bankLine = typeof context.totalQuestionsCount === "number" && context.totalQuestionsCount > 0 ? `\u062D\u0627\u0644\u064A\u0627\u064B \u0641\u064A\u0647 ${context.totalQuestionsCount} \u0633\u0624\u0627\u0644 \u062C\u0627\u0647\u0632 \u0641\u064A ${context.availableBanksCount ?? 1} \u0628\u0646\u0648\u0643 \u0623\u0633\u0626\u0644\u0629.` : "\u0641\u064A\u0647 \u0622\u0644\u0627\u0641 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u062C\u0627\u0647\u0632\u0629 \u0648\u0627\u0644\u0645\u062A\u0646\u0648\u0639\u0629 \u0628\u0627\u0644\u0645\u0648\u0642\u0639.";
+    return {
+      reply: [
+        `${bankLine}`,
+        "\u2022 \u0645\u0627\u0646\u0639 \u0627\u0644\u062A\u0643\u0631\u0627\u0631: \u0625\u0630\u0627 \u0633\u062C\u0644\u062A \u062F\u062E\u0648\u0644 \u0628\u062D\u0633\u0627\u0628\u0643\u060C \u0627\u0644\u0646\u0638\u0627\u0645 \u0628\u0633\u062C\u0651\u0644 \u0643\u0644 \u0633\u0624\u0627\u0644 \u0645\u0631\u0651 \u0639\u0644\u064A\u0643 \u0648\u0645\u0627 \u0628\u0639\u064A\u062F\u0647 \u0623\u0628\u062F\u0627\u064B \u063A\u064A\u0631 \u0644\u0645\u0627 \u062A\u062E\u0644\u0651\u0635 \u0643\u0644 \u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0641\u0626\u0629!",
+        "\u2022 \u0627\u0633\u062A\u0648\u062F\u064A\u0648 \u0627\u0644\u062F\u0631\u0633 \u0627\u0644\u0630\u0643\u064A: \u0627\u0644\u0645\u0639\u0644\u0645 \u0623\u0648 \u0627\u0644\u0645\u0634\u0631\u0641 \u0628\u0631\u0641\u0639 \u0645\u0644\u0641 PDF \u0644\u0644\u062F\u0631\u0633\u060C \u0648\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0628\u062D\u0644\u0644\u0647 \u0648\u0628\u0639\u0645\u0644\u0643 \u062E\u0631\u064A\u0637\u0629 \u0645\u0639\u0631\u0641\u064A\u0629 \u0648\u0628\u0648\u0644\u0651\u062F \u0623\u0633\u0626\u0644\u0629 \u0645\u0648\u0632\u0648\u0646\u0629 \u0639\u0644\u0649 \u0627\u0644\u062C\u0648\u0644\u0627\u062A!"
+      ].join("\n"),
+      suggestions: defaultSuggestions
+    };
+  }
+  if (/(اقترح|مباراه|شو العب|فئات|مستوى|اعمار)/.test(norm)) {
+    return {
+      reply: [
+        "\u0623\u062D\u0633\u0646 3 \u062E\u064A\u0627\u0631\u0627\u062A \u062A\u0628\u062F\u0623 \u0641\u064A\u0647\u0645 \u062D\u0633\u0628 \u0642\u0639\u062F\u062A\u0643\u0645:",
+        "\u2022 \u062C\u0644\u0633\u0629 \u0633\u0631\u064A\u0639\u0629 (5 \u062F\u0642\u0627\u0626\u0642): \u0627\u0644\u0631\u0634\u0627\u0634 + \u0627\u062E\u062A\u064A\u0627\u0631 \u0645\u0646 \u0645\u062A\u0639\u062F\u062F + \u0635\u062D \u0623\u0648 \u062E\u0637\u0623.",
+        "\u2022 \u0627\u0644\u0642\u0639\u062F\u0629 \u0627\u0644\u0643\u0644\u0627\u0633\u064A\u0643\u064A\u0629 (10 \u062F\u0642\u0627\u0626\u0642): \u0627\u0644\u0631\u0634\u0627\u0634 + \u0627\u062E\u062A\u064A\u0627\u0631 \u0645\u062A\u0639\u062F\u062F + \u0645\u0646 \u0623\u0646\u0627 + \u0627\u0644\u062C\u0631\u0633 + \u0627\u0644\u062C\u0648\u0644\u0629 \u0627\u0644\u0630\u0647\u0628\u064A\u0629.",
+        "\u2022 \u062A\u062D\u062F\u064A \u0627\u0644\u0646\u0634\u0627\u0645\u0649 \u0627\u0644\u0642\u0648\u064A: \u0627\u0644\u062C\u0631\u0633 + \u0627\u0644\u0630\u0627\u0643\u0631\u0629 + \u0631\u062A\u0628 \u0627\u0644\u0639\u0646\u0627\u0635\u0631 + \u0627\u0643\u062A\u0634\u0641 \u0627\u0644\u0645\u062E\u062A\u0644\u0641 + \u0645\u064A\u0646 \u064A\u0632\u0648\u0651\u062F + \u0627\u0644\u0630\u0647\u0628\u064A\u0629!",
+        `\u2022 \u0648\u0643\u0645\u0627\u0646 \u0645\u062A\u0648\u0641\u0631 5 \u0641\u0626\u0627\u062A \u0639\u0645\u0631\u064A\u0629: ${Object.values(AGE_GROUP_LABELS).slice(0, 5).join("\u060C ")}\u060C \u0648${Object.values(DIFFICULTY_LABELS).join(" / ")}.`
+      ].join("\n"),
+      suggestions: defaultSuggestions
+    };
+  }
+  const liveHint = session ? `
+
+${summarizeLiveSessionForBot(session)}` : "";
+  return {
+    reply: `\u0647\u0644\u0627 \u0628\u064A\u0643 \u064A\u0627 \u0646\u0634\u0645\u064A! \u0623\u0646\u0627 \xAB\u0646\u0634\u0645\u064A\xBB\u060C \u0627\u0644\u0628\u0648\u062A \u0627\u0644\u0623\u0631\u062F\u0646\u064A \u0627\u0644\u0641\u0627\u0647\u0645 \xAB\u062A\u062D\u062F\u0651\u064A \u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629\xBB \u0645\u0646 \u0623\u0648\u0644\u0647\u0627 \u0644\u0622\u062E\u0631\u0647\u0627 \u2014 \u0645\u0646 \u0627\u0644\u064012 \u062C\u0648\u0644\u0629 \u0644\u062D\u062F \u0627\u0644\u0645\u0632\u0627\u064A\u062F\u0629 \u0648\u0627\u0644\u062C\u0631\u0633 \u0648\u0627\u0644\u0634\u0627\u0634\u0629 \u0648\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A.${liveHint}
+
+\u0627\u0633\u0623\u0644\u0646\u064A \u0639\u0646 \u0623\u064A \u062C\u0648\u0644\u0629\u060C \u0639\u0646 \u0627\u0644\u0646\u0642\u0627\u0637\u060C \u0639\u0646 \u0648\u0636\u0639 \u0645\u0628\u0627\u0631\u0627\u062A\u0643\u060C \u0623\u0648 \u0643\u0628\u0651\u0633 \xAB\u062A\u062D\u062F\u0651\u0649 \u0646\u0634\u0645\u064A\xBB \u0648\u0646\u0644\u0639\u0628 \u0648\u062C\u0647 \u0644\u0648\u062C\u0647!`,
+    suggestions: defaultSuggestions
+  };
+}
+function buildJordanianBotSystemPrompt(context = {}) {
+  const roundsSpec = ALL_ROUND_TYPES.map((rt) => {
+    const g = ROUND_JORDANIAN_GUIDES[rt];
+    return `- ${ROUND_RULES[rt].nameAr} (${rt}): ${g.howToPlayJo} | \u0627\u0644\u0646\u0642\u0627\u0637: ${g.scoringJo}`;
+  }).join("\n");
+  const liveBlock = context.session ? `
+\u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0628\u0627\u0631\u0627\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629 (\u0644\u0644\u0625\u0631\u0634\u0627\u062F \u0641\u0642\u0637 \u2014 \u0644\u0627 \u062A\u062E\u0645\u0646 \u0623\u0648 \u062A\u0643\u0634\u0641 \u0623\u064A \u0625\u062C\u0627\u0628\u0629 \u0633\u0631\u064A\u0629 \u063A\u064A\u0631 \u0645\u0643\u0634\u0648\u0641\u0629):
+${summarizeLiveSessionForBot(context.session)}
+\u0627\u0644\u0633\u0624\u0627\u0644 \u0627\u0644\u0645\u0639\u0631\u0648\u0636 \u062D\u0627\u0644\u064A\u0627\u064B: ${context.session.currentQuestion?.prompt ?? "\u0644\u0627 \u064A\u0648\u062C\u062F \u0633\u0624\u0627\u0644 \u0645\u0639\u0631\u0648\u0636 \u0628\u0639\u062F"}` : `
+\u0627\u0644\u0634\u0627\u0634\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629 \u0644\u0644\u0645\u0633\u062A\u062E\u062F\u0645: ${context.screen || "\u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629"}`;
+  return [
+    "\u0623\u0646\u062A \xAB\u0646\u0634\u0645\u064A\xBB\u060C \u0628\u0648\u062A \u0623\u0631\u062F\u0646\u064A \u0630\u0643\u064A\u060C \u062E\u0641\u064A\u0641 \u062F\u0645\u060C \u0648\u0645\u0624\u062F\u0628 (\u0628\u0623\u062C\u0648\u0627\u0621 \u0639\u0627\u0626\u0644\u064A\u0629 \u0648\u0645\u0646\u0627\u0633\u0628\u0629 \u0644\u0645\u0643\u062A\u0628\u0629 \u0623\u0644\u0639\u0627\u0628 \u0645\u0633\u062C\u062F \u0627\u0628\u0646 \u062A\u064A\u0645\u064A\u0629 \u0641\u064A \u0627\u0644\u0623\u0631\u062F\u0646).",
+    "\u062A\u062A\u0643\u0644\u0645 \u0628\u0627\u0644\u0644\u0647\u062C\u0629 \u0627\u0644\u0623\u0631\u062F\u0646\u064A\u0629 \u0627\u0644\u0628\u064A\u0636\u0627\u0621 \u0627\u0644\u0648\u0627\u0636\u062D\u0629 \u0648\u0627\u0644\u0644\u0637\u064A\u0641\u0629 (\u0645\u062B\u0644: \u0647\u0644\u0627 \u0628\u0627\u0644\u0646\u0634\u0645\u064A\u060C \u064A\u0627 \u0632\u0644\u0645\u0629\u060C \u0643\u0641\u0648\u060C \u0634\u062F\u0651 \u062D\u064A\u0644\u0643\u060C \u0639\u0627\u0644\u0633\u0631\u064A\u0639\u060C \u064A\u0627 \u0633\u0644\u0627\u0645 \u0639\u0644\u064A\u0643\u060C \u064A\u0644\u0627 \u0646\u0628\u0644\u0651\u0634).",
+    "\u0623\u0646\u062A \u0641\u0627\u0647\u0645 \u0644\u0639\u0628\u0629 \xAB\u062A\u062D\u062F\u0651\u064A \u0627\u0644\u064030 \u062B\u0627\u0646\u064A\u0629\xBB \u0643\u0627\u0645\u0644\u0629 \u0628\u0643\u0644 \u062A\u0641\u0627\u0635\u064A\u0644\u0647\u0627:",
+    roundsSpec,
+    "\u0627\u0644\u0642\u0648\u0627\u0639\u062F \u0627\u0644\u0639\u0627\u0645\u0629:",
+    "- \u0627\u0644\u0641\u0626\u0627\u062A \u0627\u0644\u0639\u0645\u0631\u064A\u0629 \u0627\u0644\u062E\u0645\u0633\u0629: \u0627\u0644\u0628\u0631\u0627\u0639\u0645 (7-10)\u060C \u0627\u0644\u0623\u0634\u0628\u0627\u0644 (11-13)\u060C \u0627\u0644\u0641\u062A\u064A\u0627\u0646 \u0648\u0627\u0644\u0634\u0628\u0627\u0628 (14-17)\u060C \u0627\u0644\u0643\u0628\u0627\u0631 (+18)\u060C \u0648\u0639\u0627\u0626\u0644\u064A.",
+    "- \u062A\u0648\u062C\u062F 3 \u0623\u0648\u0636\u0627\u0639 \u0644\u0639\u0628: \u0634\u0627\u0634\u0629 \u0648\u0627\u062D\u062F\u0629 \u062A\u0641\u0627\u0639\u0644\u064A\u0629\u060C \u062A\u062D\u0643\u0645 \u0647\u0627\u062A\u0641 \u0627\u0644\u0645\u0634\u0631\u0641 + \u0634\u0627\u0634\u0629 \u0627\u0644\u062C\u0645\u0647\u0648\u0631 + QR \u062C\u0631\u0633 \u0627\u0644\u0641\u0631\u064A\u0642\u064A\u0646\u060C \u0648\u0627\u0644\u0644\u0639\u0628 \u0627\u0644\u0641\u0631\u062F\u064A \u0636\u062F\u0643 \u0623\u0646\u062A (\u0646\u0634\u0645\u064A \u0627\u0644\u0628\u0648\u062A \u0627\u0644\u0623\u0631\u062F\u0646\u064A).",
+    "- \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A \u0627\u0644\u0645\u0633\u062C\u0644\u0629 \u062A\u0645\u0646\u0639 \u062A\u0643\u0631\u0627\u0631 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0639\u0628\u0631 \u0627\u0644\u062C\u0644\u0633\u0627\u062A\u060C \u0648\u064A\u0648\u062C\u062F \u0627\u0633\u062A\u0648\u062F\u064A\u0648 \u0627\u0644\u062F\u0631\u0633 \u0627\u0644\u0630\u0643\u064A \u0644\u062A\u062D\u0648\u064A\u0644 \u0645\u0644\u0641\u0627\u062A PDF \u0625\u0644\u0649 \u062C\u0648\u0644\u0627\u062A \u0623\u0633\u0626\u0644\u0629.",
+    "- \u0645\u0647\u0645 \u062C\u062F\u0627\u064B: \u0625\u0630\u0627 \u0633\u0623\u0644\u0643 \u0627\u0644\u0644\u0627\u0639\u0628 \u0639\u0646 \u0625\u062C\u0627\u0628\u0629 \u0633\u0624\u0627\u0644 \u062C\u0627\u0631\u064A \u0627\u0644\u0622\u0646 \u0648\u0644\u0645 \u064A\u0646\u0643\u0634\u0641 \u062C\u0648\u0627\u0628\u0647 \u0628\u0639\u062F (`answerRevealed: false`)\u060C \u0644\u0627 \u062A\u063A\u0634\u0651\u0634\u0647 \u0627\u0644\u062C\u0648\u0627\u0628 \u0627\u0644\u0635\u062D\u064A\u062D! \u0623\u0639\u0637\u0647 \u062A\u0644\u0645\u064A\u062D\u0627\u064B \u0639\u0627\u0645\u0627\u064B \u0639\u0646 \u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A\u0629 \u0627\u0644\u062C\u0648\u0644\u0629 \u0641\u0642\u0637.",
+    "\u0623\u062C\u0628 \u0628\u0625\u064A\u062C\u0627\u0632 \u0648\u0648\u0636\u0648\u062D (3-6 \u0623\u0633\u0637\u0631 \u0645\u0631\u062A\u0628\u0629) \u0648\u0628\u0644\u0637\u0641 \u0623\u0631\u062F\u0646\u064A \u0623\u0635\u064A\u0644\u060C \u0648\u0627\u0643\u062A\u0628 \u0646\u0635\u0627\u064B \u0639\u0627\u062F\u064A\u0627\u064B \u0645\u0628\u0627\u0634\u0631\u0629 \u0628\u062F\u0648\u0646 \u0639\u0644\u0627\u0645\u0627\u062A \u0645\u0627\u0631\u0643\u062F\u0627\u0648\u0646 \u0645\u062B\u0644 ** \u0623\u0648 ## \u0623\u0648 ```.",
+    liveBlock
+  ].join("\n");
+}
+
+// src/server/wsHub.ts
 var GameSessionHub = class {
   constructor(db2) {
     this.rooms = /* @__PURE__ */ new Map();
@@ -4662,8 +5482,11 @@ var GameSessionHub = class {
     this.tickInterval = setInterval(() => {
       const now = Date.now();
       for (const [code, session] of this.sessionCache.entries()) {
-        if (!this.rooms.get(code)?.size && session.phase !== "countdown") continue;
-        const changed = this.syncLiveTimer(session, now);
+        if (!this.rooms.get(code)?.size && session.phase !== "countdown" && !(session.phase === "playing" && session.settings.botOpponent?.enabled)) continue;
+        let changed = this.syncLiveTimer(session, now);
+        if (this.processBotTurn(session, now)) {
+          changed = true;
+        }
         if (changed) {
           this.saveSession(session);
           this.broadcast(code);
@@ -4844,6 +5667,14 @@ var GameSessionHub = class {
       scoreAuditLog: [],
       undoStack: [],
       objections: [],
+      botChat: settings.botOpponent?.enabled ? {
+        id: `bot-${crypto4.randomUUID().slice(0, 8)}`,
+        text: pickJordanianBanter("match_start"),
+        mood: "hype",
+        atMs: Date.now()
+      } : null,
+      botNextActionAtMs: null,
+      botPendingKey: null,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     this.db.transaction(() => {
@@ -5057,6 +5888,7 @@ var GameSessionHub = class {
       settings: s.settings,
       currentQuestion: qView,
       stats: s.stats,
+      botChat: s.botChat ?? null,
       scoreAuditLog: includeHostSecret ? s.scoreAuditLog.slice(-40) : void 0,
       updatedAt: s.updatedAt
     };
@@ -5571,6 +6403,14 @@ var GameSessionHub = class {
       teamIndex: targetTeamIdx,
       atMs: Date.now()
     };
+    if (s.settings.botOpponent?.enabled && targetTeamIdx !== s.settings.botOpponent.teamIndex) {
+      s.botChat = {
+        id: `bot-${crypto4.randomUUID().slice(0, 8)}`,
+        text: leadChanged ? pickJordanianBanter("lead_change") : pickJordanianBanter(evalRes.isCorrect ? "player_correct" : "player_wrong"),
+        mood: evalRes.isCorrect ? "happy" : "tease",
+        atMs: Date.now()
+      };
+    }
     if (canTransferBuzzerTurn) {
       s.answerRevealed = false;
     } else if (isSprint && s.timerRemainingSec > 0) {
@@ -6019,6 +6859,15 @@ var GameSessionHub = class {
       }
     }
     const winInfo = determineWinner(s.teams);
+    if (s.phase === "finished" && s.settings.botOpponent?.enabled) {
+      const botIdx = s.settings.botOpponent.teamIndex;
+      s.botChat = {
+        id: `bot-${crypto4.randomUUID().slice(0, 8)}`,
+        text: winInfo.isTie ? pickJordanianBanter("match_tie") : winInfo.winnerIndices[0] === botIdx ? pickJordanianBanter("match_win_bot") : pickJordanianBanter("match_win_player"),
+        mood: "gg",
+        atMs: Date.now()
+      };
+    }
     if (s.phase === "finished" && winInfo.winnerIndices.length === 1) {
       const winningTeam = s.teams[winInfo.winnerIndices[0]];
       for (const pid of winningTeam?.participantIds ?? []) {
@@ -6037,7 +6886,199 @@ var GameSessionHub = class {
     this.broadcast(code);
     return this.projectView(s, true);
   }
+  processBotTurn(s, now) {
+    const botCfg = s.settings.botOpponent;
+    if (!botCfg?.enabled) return false;
+    if (s.phase !== "playing" || !s.currentQuestion || s.answerRevealed || s.memoryPhase === "memorize") {
+      s.botNextActionAtMs = null;
+      s.botPendingKey = null;
+      return false;
+    }
+    const slotKey = this.buildCurrentSlotKey(s) ?? "none";
+    const pendingKey = [
+      slotKey,
+      s.activeTeamIndex,
+      s.buzzedTeamIndex ?? "none",
+      s.failedBuzzTeams.join(","),
+      s.revealedClueCount,
+      s.bidState?.phase ?? "none",
+      s.bidState?.turnTeamIndex ?? "none",
+      s.bidState?.currentBid ?? 0,
+      s.bidState?.acceptedAnswers.length ?? 0
+    ].join("|");
+    const planned = decideBotTurnAction({
+      session: s,
+      botTeamIndex: botCfg.teamIndex,
+      skill: botCfg.skill
+    });
+    if (planned.type === "none") {
+      s.botNextActionAtMs = null;
+      s.botPendingKey = null;
+      return false;
+    }
+    if (s.botPendingKey !== pendingKey || !s.botNextActionAtMs) {
+      const round = s.rounds[s.currentRoundIndex];
+      const effectiveType = round?.roundType === "golden" && round.goldenTargetType ? round.goldenTargetType : s.currentQuestion.roundType;
+      const delayKind = planned.type === "buzz" ? "buzz" : planned.type === "bid_raise" || planned.type === "bid_challenge" || planned.type === "bid_record_answer" ? "bid" : ROUND_RULES[effectiveType].multiQuestionWithinTimer ? "sprint" : "standard";
+      s.botPendingKey = pendingKey;
+      s.botNextActionAtMs = now + computeBotDelayMs(botCfg.skill, delayKind);
+      return false;
+    }
+    if (now < s.botNextActionAtMs) {
+      return false;
+    }
+    s.botNextActionAtMs = null;
+    s.botPendingKey = null;
+    s.botChat = {
+      id: `bot-${crypto4.randomUUID().slice(0, 8)}`,
+      text: planned.banterText,
+      mood: planned.banterMood,
+      atMs: now
+    };
+    switch (planned.type) {
+      case "buzz": {
+        this.handleBuzz(s.code, planned.teamIndex, s.currentQuestion.id);
+        return false;
+      }
+      case "bid_raise": {
+        this.handleBidAction(
+          s.code,
+          "bid_raise",
+          { teamIndex: planned.teamIndex, targetBid: planned.targetBid },
+          true
+        );
+        return false;
+      }
+      case "bid_challenge": {
+        this.handleBidAction(s.code, "bid_challenge", {}, true);
+        return false;
+      }
+      case "bid_record_answer": {
+        this.handleBidAction(
+          s.code,
+          "bid_record_answer",
+          { teamIndex: planned.teamIndex, answerText: planned.answerText, hostConfirmed: false },
+          false
+        );
+        return false;
+      }
+      case "bid_complete": {
+        this.handleBidAction(s.code, "bid_complete", {}, true);
+        return false;
+      }
+      case "reveal_next_clue": {
+        this.handleHostAction(s.code, "reveal_next_clue", { questionId: s.currentQuestion.id });
+        return false;
+      }
+      case "answer": {
+        this.submitPlayerAnswer(
+          s.code,
+          planned.teamIndex,
+          planned.submitted,
+          void 0,
+          s.currentQuestion.id,
+          true
+        );
+        return false;
+      }
+    }
+  }
 };
+
+// src/server/botService.ts
+import { GoogleGenAI as GoogleGenAI2, ThinkingLevel as ThinkingLevel2 } from "@google/genai";
+var BotGeminiError = class extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+};
+function buildAdvisorContextFromDb(db2, hub2, screen, sessionCode) {
+  const session = sessionCode ? hub2.getSessionView(sessionCode, false) : null;
+  let availableBanksCount = 0;
+  let totalQuestionsCount = 0;
+  try {
+    availableBanksCount = db2.prepare(`SELECT COUNT(*) as c FROM question_banks WHERE is_active = 1`).get().c;
+    totalQuestionsCount = db2.prepare(`SELECT COUNT(*) as c FROM questions WHERE status = 'published'`).get().c;
+  } catch {
+  }
+  return {
+    screen,
+    session,
+    availableBanksCount,
+    totalQuestionsCount
+  };
+}
+function getLocalJordanianGuideReply(db2, hub2, params) {
+  const context = buildAdvisorContextFromDb(db2, hub2, params.screen, params.sessionCode);
+  return answerGameQuestionLocally(params.message, context);
+}
+async function callJordanianBotGemini(db2, hub2, params) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new BotGeminiError(
+      "\u0645\u0641\u062A\u0627\u062D \u062E\u062F\u0645\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (GEMINI_API_KEY) \u0645\u0634 \u0645\u0636\u0627\u0641 \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645. \u062A\u0642\u062F\u0631 \u062A\u0633\u062A\u062E\u062F\u0645 \xAB\u0645\u0631\u0634\u062F \u0646\u0634\u0645\u064A \u0627\u0644\u0641\u0648\u0631\u064A\xBB \u0645\u062C\u0627\u0646\u0627\u064B \u0623\u0648 \u062A\u0636\u064A\u0641 \u0627\u0644\u0645\u0641\u062A\u0627\u062D \u0645\u0646 Settings > Secrets.",
+      503,
+      "GEMINI_KEY_MISSING"
+    );
+  }
+  const context = buildAdvisorContextFromDb(db2, hub2, params.screen, params.sessionCode);
+  const systemInstruction = buildJordanianBotSystemPrompt(context);
+  const ai = new GoogleGenAI2({
+    apiKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build"
+      }
+    }
+  });
+  const safeHistory = (params.history ?? []).slice(-8).map((item) => ({
+    role: item.role === "model" ? "model" : "user",
+    parts: [{ text: String(item.text || "").slice(0, 1200) }]
+  }));
+  const contents = [
+    ...safeHistory,
+    {
+      role: "user",
+      parts: [{ text: params.message.slice(0, 1200) }]
+    }
+  ];
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-4-hydrogen",
+      contents,
+      config: {
+        systemInstruction,
+        thinkingConfig: { thinkingLevel: ThinkingLevel2.LOW }
+      }
+    });
+    const rawText = (response.text ?? "").trim();
+    const text3 = rawText.replace(/\*\*(.*?)\*\*/g, "$1").replace(/^#{1,6}\s+/gm, "").trim();
+    if (!text3) {
+      throw new BotGeminiError("\u0645\u0627 \u0631\u062C\u0639 \u0631\u062F \u0648\u0627\u0636\u062D \u0645\u0646 \u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A. \u062C\u0631\u0651\u0628 \u062A\u0633\u0623\u0644 \u0645\u0631\u0629 \u062B\u0627\u0646\u064A\u0629.", 502, "EMPTY_RESPONSE");
+    }
+    return { reply: text3, model: "gemini-4-hydrogen" };
+  } catch (err) {
+    if (err instanceof BotGeminiError) throw err;
+    const raw = err instanceof Error ? err.message : String(err);
+    if (/403|PERMISSION_DENIED|API_KEY_INVALID|400/i.test(raw)) {
+      throw new BotGeminiError(
+        "\u0645\u0641\u062A\u0627\u062D Gemini API \u063A\u064A\u0631 \u0635\u0627\u0644\u062D \u0623\u0648 \u0645\u0631\u0641\u0648\u0636. \u062A\u0623\u0643\u062F \u0645\u0646 \u0627\u0644\u0645\u0641\u062A\u0627\u062D \u0641\u064A Settings > Secrets.",
+        403,
+        "API_KEY_INVALID"
+      );
+    }
+    if (/429|RESOURCE_EXHAUSTED|quota/i.test(raw)) {
+      throw new BotGeminiError(
+        "\u0627\u0646\u0634\u063A\u0644\u062A \u062D\u0635\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 \u0647\u0633\u0627 (429). \u0627\u0633\u062A\u062E\u062F\u0645 \xAB\u0645\u0631\u0634\u062F \u0646\u0634\u0645\u064A \u0627\u0644\u0641\u0648\u0631\u064A\xBB \u0623\u0648 \u062C\u0631\u0651\u0628 \u0628\u0639\u062F \u0634\u0648\u064A.",
+        429,
+        "QUOTA_EXHAUSTED"
+      );
+    }
+    throw new BotGeminiError("\u062A\u0639\u0630\u0651\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0645\u062D\u0631\u0643 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u062D\u0627\u0644\u064A\u0627\u064B. \u0627\u0633\u062A\u062E\u062F\u0645 \u0627\u0644\u0645\u0631\u0634\u062F \u0627\u0644\u0641\u0648\u0631\u064A \u0623\u0648 \u062D\u0627\u0648\u0644 \u0628\u0639\u062F \u0644\u062D\u0638\u0629.", 502, "UPSTREAM_ERROR");
+  }
+}
 
 // src/server/appFactory.ts
 function decodeUploadedFilename(rawName) {
@@ -6756,6 +7797,18 @@ data: ${JSON.stringify(data)}
         res.status(400).json({ error: "\u0631\u0627\u062C\u0639 \u0623\u0633\u0645\u0627\u0621 \u0627\u0644\u0641\u0631\u0642 \u0648\u0627\u0644\u0645\u0634\u0627\u0631\u0643\u064A\u0646." });
         return;
       }
+      const rawBot = body.settings?.botOpponent;
+      const validSkills = ["relaxed", "balanced", "fierce"];
+      const sanitizedBot = rawBot?.enabled ? {
+        enabled: true,
+        teamIndex: Number.isInteger(rawBot.teamIndex) && rawBot.teamIndex >= 0 && rawBot.teamIndex <= 1 ? rawBot.teamIndex : 1,
+        skill: validSkills.includes(rawBot.skill) ? rawBot.skill : "balanced",
+        personaName: typeof rawBot.personaName === "string" && rawBot.personaName.trim() ? rawBot.personaName.trim().slice(0, 48) : JORDANIAN_BOT_DEFAULT_NAME
+      } : void 0;
+      const sanitizedSettings = body.settings ? {
+        ...body.settings,
+        botOpponent: sanitizedBot
+      } : void 0;
       const session = hub2.createSession({
         hostProfileId: req.user?.id ?? null,
         guestHostKey,
@@ -6769,7 +7822,7 @@ data: ${JSON.stringify(data)}
         teams: body.teams || [],
         roundTypes: body.roundTypes || ["rapid_fire", "multiple_choice", "who_am_i", "buzzer", "golden"],
         roundOverrides: body.roundOverrides,
-        settings: body.settings,
+        settings: sanitizedSettings,
         skipVs: Boolean(body.skipVs)
       });
       if (guestHostKey) res.cookie(`t30_host_${session.code}`, guestHostKey, {
@@ -6921,6 +7974,53 @@ data: ${JSON.stringify(data)}
       return;
     }
     res.json({ session: result.view });
+  });
+  app2.post("/api/bot/guide", (req, res) => {
+    const body = req.body;
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+    if (!message || message.length > 1e3) {
+      res.status(400).json({ error: "\u0627\u0643\u062A\u0628 \u0633\u0624\u0627\u0644\u0643 \u0644\u0646\u0634\u0645\u064A (\u0628\u062D\u062F \u0623\u0642\u0635\u0649 1000 \u062D\u0631\u0641)." });
+      return;
+    }
+    const screen = typeof body.screen === "string" ? body.screen.slice(0, 40) : void 0;
+    const sessionCode = typeof body.sessionCode === "string" && /^[A-Za-z0-9]{6}$/.test(body.sessionCode.trim()) ? body.sessionCode.trim().toUpperCase() : void 0;
+    const reply = getLocalJordanianGuideReply(db2, hub2, {
+      message,
+      screen,
+      sessionCode
+    });
+    res.json({ ...reply, mode: "local_guide" });
+  });
+  app2.post("/api/bot/chat", async (req, res) => {
+    const body = req.body;
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+    if (!message || message.length > 1200) {
+      res.status(400).json({ error: "\u0627\u0643\u062A\u0628 \u0631\u0633\u0627\u0644\u062A\u0643 \u0644\u0646\u0634\u0645\u064A (\u0628\u062D\u062F \u0623\u0642\u0635\u0649 1200 \u062D\u0631\u0641)." });
+      return;
+    }
+    const screen = typeof body.screen === "string" ? body.screen.slice(0, 40) : void 0;
+    const sessionCode = typeof body.sessionCode === "string" && /^[A-Za-z0-9]{6}$/.test(body.sessionCode.trim()) ? body.sessionCode.trim().toUpperCase() : void 0;
+    const history = Array.isArray(body.history) ? body.history.filter(
+      (item) => Boolean(item) && typeof item === "object" && (item.role === "user" || item.role === "model") && typeof item.text === "string"
+    ).slice(-8) : [];
+    try {
+      const result = await callJordanianBotGemini(db2, hub2, {
+        message,
+        history,
+        screen,
+        sessionCode
+      });
+      res.json({ ...result, mode: "gemini" });
+    } catch (err) {
+      if (err instanceof BotGeminiError) {
+        res.status(err.status).json({ error: err.message, code: err.code });
+        return;
+      }
+      res.status(502).json({
+        error: "\u062A\u0639\u0630\u0651\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0645\u062D\u0631\u0643 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u062D\u0627\u0644\u064A\u0627\u064B.",
+        code: "UPSTREAM_ERROR"
+      });
+    }
   });
   return { app: app2, hub: hub2 };
 }
@@ -8836,7 +9936,7 @@ var questions_bank_5000_default = [
 ];
 
 // server.ts
-var PORT = Number(process.env.PORT || 3e3);
+var PORT = Number(process.env.DEFAULT_APP_PORT || 3e3);
 var isProd = process.env.NODE_ENV === "production";
 var db = createDatabase(process.env.T30_DB_PATH || void 0);
 seedDatabase(db);

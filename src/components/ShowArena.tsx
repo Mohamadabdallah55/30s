@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, ArrowUp, Bell, Pause, Play, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { normalizeChallengeItem } from '../shared/gameRules';
 import type { GameSessionView } from '../shared/types';
-import { ShowMark } from './ShowArt';
+import { NashmiMascot, ShowMark } from './ShowArt';
 import { ChallengeDisplay, ScoreRibbon, ShowIntermission, useShowCountdown } from './ShowPresentation';
 
 type Action = (action: string, payload?: Record<string, unknown>) => Promise<void>;
@@ -21,6 +21,7 @@ interface ShowArenaProps {
   onReplay: () => void;
   onSound: () => void;
   onHost?: () => void;
+  onOpenBot?: () => void;
 }
 
 function PlayerInputs({ session, busy, canControl, onAnswer, onAction, onBuzz }: Pick<ShowArenaProps, 'session' | 'busy' | 'canControl' | 'onAnswer' | 'onAction' | 'onBuzz'>) {
@@ -32,8 +33,37 @@ function PlayerInputs({ session, busy, canControl, onAnswer, onAction, onBuzz }:
   const [duplicate, setDuplicate] = useState(false);
   const ended = session.answerRevealed || session.timerRemainingSec <= 0 || q.memoryPhase === 'memorize' || session.phase === 'paused';
   if (ended || !canControl) return null;
-  const active = session.teams[session.buzzedTeamIndex ?? session.activeTeamIndex];
+
   const type = q.roundType;
+  const botCfg = session.settings.botOpponent;
+  const botIdx = botCfg?.enabled ? botCfg.teamIndex : -1;
+  const isBotsTurn = Boolean(
+    botCfg?.enabled &&
+      (session.bidState
+        ? session.bidState.phase === 'bidding'
+          ? session.bidState.turnTeamIndex === botIdx
+          : session.bidState.bidderTeamIndex === botIdx
+        : type === 'buzzer'
+        ? session.buzzedTeamIndex === botIdx
+        : session.activeTeamIndex === botIdx)
+  );
+
+  if (isBotsTurn) {
+    return (
+      <div className="nashmi-turn-wait" role="status" aria-live="polite">
+        <NashmiMascot size={30} mood="thinking" />
+        <span>
+          {session.bidState
+            ? session.bidState.phase === 'bidding'
+              ? 'دور نشمي بالمزايدة… عم يقرّر!'
+              : 'دور نشمي بتنفيذ التحدي… راقب إجاباته!'
+            : 'دور نشمي… عم بفكّر بالإجابة!'}
+        </span>
+      </div>
+    );
+  }
+
+  const active = session.teams[session.buzzedTeamIndex ?? session.activeTeamIndex];
   const button = (label: ReactNode, onClick: () => void, variant = 'cream', disabled = false) =>
     <button type="button" className={`show-button show-button--${variant}`} disabled={busy || disabled} onClick={onClick}>{label}</button>;
 
@@ -59,9 +89,12 @@ function PlayerInputs({ session, busy, canControl, onAnswer, onAction, onBuzz }:
     </div>;
   }
 
-  if (type === 'buzzer' && session.buzzedTeamIndex === null) return <div className="show-arena__actions">
-    {session.teams.map((team) => <button key={team.index} type="button" className="show-button show-button--pink" disabled={busy || session.failedBuzzTeams.includes(team.index)} onClick={() => onBuzz(team.index)}><Bell /> {team.name}</button>)}
-  </div>;
+  if (type === 'buzzer' && session.buzzedTeamIndex === null) {
+    const buzzTeams = botCfg?.enabled ? session.teams.filter((t) => t.index !== botIdx) : session.teams;
+    return <div className="show-arena__actions">
+      {buzzTeams.map((team) => <button key={team.index} type="button" className="show-button show-button--pink" disabled={busy || session.failedBuzzTeams.includes(team.index)} onClick={() => onBuzz(team.index)}><Bell /> {botCfg?.enabled ? `جرس ${team.name} (اضغط قبل نشمي!)` : team.name}</button>)}
+    </div>;
+  }
 
   if (type === 'order_items') {
     function move(index: number, offset: number) {
@@ -121,6 +154,7 @@ export function ShowArena(props: ShowArenaProps) {
   const countdown = useShowCountdown(session.countdownEndsAtMs);
   const playing = session.phase === 'playing' || session.phase === 'paused';
   const q = session.currentQuestion;
+  const botActive = Boolean(session.settings.botOpponent?.enabled);
   const footer = session.phase === 'vs' ? ['يلا نبلّش!', 'start_match']
     : session.phase === 'round_intro' ? ['ابدأ العدّ', 'round_countdown']
     : session.phase === 'countdown' ? ['تجاوز العدّ', 'skip_intro']
@@ -129,11 +163,28 @@ export function ShowArena(props: ShowArenaProps) {
     : session.phase === 'playing' && (!session.bidState || session.answerRevealed) ? ['كمّل التحدّي', 'next_question'] : null;
   return <div className="show-stage show-arena" dir="rtl" data-phase={session.phase}>
     <header className="show-stage__head"><ShowMark /><span>{props.connected ? 'مباراة مباشرة' : 'عم نرجّع الاتصال…'} <bdi>#{session.code}</bdi></span>
+      {props.onOpenBot && (
+        <button type="button" className="show-nashmi-btn" aria-label="اسأل نشمي — البوت الأردني" onClick={props.onOpenBot}>
+          <NashmiMascot size={24} />
+          <span className="hidden sm:inline">نشمي</span>
+        </button>
+      )}
       <button type="button" className="show-stage__sound" aria-pressed={props.audio} aria-label="صوت اللعبة" onClick={props.onSound}>{props.audio ? <Volume2 /> : <VolumeX />}</button>
       <button type="button" className="show-stage__sound" aria-label="الرجوع" onClick={props.onExit}><ArrowRight /></button>
     </header>
     <main className="show-stage__main">
       {session.phase !== 'vs' && <ScoreRibbon session={session} />}
+      {botActive && session.botChat && (
+        <div className="nashmi-arena-chat" role="status" aria-live="polite" key={session.botChat.id}>
+          <div className="nashmi-arena-chat__lead">
+            <NashmiMascot size={32} mood={session.botChat.mood} />
+            <div>
+              <strong>نشمي:</strong>
+              <span>{session.botChat.text}</span>
+            </div>
+          </div>
+        </div>
+      )}
       {playing ? <ChallengeDisplay session={session} controls /> : <ShowIntermission session={session} countdown={countdown} />}
       {playing && q && <PlayerInputs key={q.id} {...props} />}
       {playing && session.bidState?.phase !== 'bidding' && !session.answerRevealed && session.timerRemainingSec === 0 && canControl && session.bidState &&
@@ -145,7 +196,7 @@ export function ShowArena(props: ShowArenaProps) {
         {session.phase === 'round_intro' && <button className="show-button show-button--cream" type="button" onClick={() => onAction('skip_intro')} disabled={busy}>تجاوز المقدّمة</button>}
         {playing && q && !session.answerRevealed && session.timerRemainingSec > 0 && session.memoryPhase !== 'memorize' && session.bidState?.phase !== 'bidding' &&
           <button type="button" className="show-button show-button--cream" disabled={busy} onClick={() => onAction(session.timerRunning ? 'pause_timer' : 'resume_timer')}><Pause size={18} /> {session.timerRunning ? 'وقّف الوقت' : 'كمّل الوقت'}</button>}
-        {props.onHost && session.phase !== 'finished' && <button type="button" className="show-button show-button--cream" onClick={props.onHost}>لوحة الحكم</button>}
+        {props.onHost && session.phase !== 'finished' && !botActive && <button type="button" className="show-button show-button--cream" onClick={props.onHost}>لوحة الحكم</button>}
         {session.phase === 'finished' && <button type="button" className="show-button show-button--yellow" onClick={props.onReplay}>مباراة جديدة</button>}
       </div>}
     </main>

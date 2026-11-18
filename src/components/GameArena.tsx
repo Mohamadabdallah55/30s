@@ -43,6 +43,8 @@ interface GameArenaProps {
   onExit: () => void;
   onGoHome?: () => void;
   onOpenHostPanel?: (code: string) => void;
+  onOpenBot?: () => void;
+  onSessionUpdate?: (next: GameSessionView) => void;
 }
 
 export function GameArena({
@@ -53,6 +55,8 @@ export function GameArena({
   onExit,
   onGoHome,
   onOpenHostPanel,
+  onOpenBot,
+  onSessionUpdate,
 }: GameArenaProps) {
   const [session, setSession] = useState<GameSessionView>(initialSession);
   const [textAnswer, setTextAnswer] = useState('');
@@ -80,6 +84,7 @@ export function GameArena({
   useShowSound(session.settings.showMode ? session : null, countdown);
   const { connected, reconnecting } = useSessionSocket(session.code, initialSession.hostSecret ? 'host' : 'player', (next) => {
     setSession(next);
+    onSessionUpdate?.(next);
   });
 
   useEffect(() => {
@@ -322,6 +327,7 @@ export function GameArena({
     return <ShowArena session={session} audio={soundEnabled} connected={connected} canControl={Boolean(session.hostSecret)}
       busy={actionPending || submitting} error={showError} onAction={sendHostAction} onAnswer={handleSubmitAnswer}
       onBuzz={handleBuzz} onExit={onExit} onReplay={onPlayAgain} onSound={onToggleSound}
+      onOpenBot={onOpenBot}
       onHost={session.hostSecret && onOpenHostPanel ? () => onOpenHostPanel(session.code) : undefined} />;
   }
 
@@ -485,6 +491,15 @@ export function GameArena({
             >
               {session.phase === 'paused' ? <Play className="w-4 h-4 text-emerald-300" /> : <Pause className="w-4 h-4 text-slate-200" />}
             </button>
+            {onOpenBot && (
+              <button
+                type="button"
+                onClick={onOpenBot}
+                className="h-9 px-3 rounded-xl bg-violet-600/80 hover:bg-violet-500 border border-violet-300/30 text-white font-bold whitespace-nowrap"
+              >
+                نشمي
+              </button>
+            )}
             {onOpenHostPanel && (
               <button
                 type="button"
@@ -682,6 +697,12 @@ export function GameArena({
               <CheckCircle2 className="w-4 h-4 shrink-0" />
             )}
             <span>{session.lastFeedback.message}</span>
+          </div>
+        )}
+
+        {session.settings.botOpponent?.enabled && session.botChat && (
+          <div className="rounded-xl px-4 py-2.5 text-sm font-bold bg-[#FFF7E3] text-[#29183E] border-2 border-[#29183E] flex items-center justify-between gap-3">
+            <span>{session.settings.botOpponent.personaName || 'نشمي'}: {session.botChat.text}</span>
           </div>
         )}
 
