@@ -6,12 +6,18 @@ import {
   buildDefaultRoundConfigs,
 } from './gameRules';
 import {
+  HOST_COMMENTARY_BANK,
+  HostReactionEngine,
+  ROUND_HOST_INTROS,
   ROUND_JORDANIAN_GUIDES,
   answerGameQuestionLocally,
   buildJordanianBotSystemPrompt,
   decideBotTurnAction,
+  getTotalHostCommentaryCount,
   pickJordanianBanter,
+  pickNonRepeatingFromPool,
   resolveCorrectOptionIndex,
+  resolveNashmiVisualMood,
 } from './jordanianBot';
 import type { BidChallengeState, GameSessionView, QuestionRecord, RoundType } from './types';
 
@@ -326,3 +332,548 @@ test('Jordanian advisor understands live match state and never leaks secret answ
   assert.equal(resolveCorrectOptionIndex(makeQuestion()), 0);
   assert.ok(pickJordanianBanter('match_start').length > 5);
 });
+
+function makeLiveSessionView(overrides: Partial<GameSessionView> = {}): GameSessionView {
+  return {
+    id: 'sess-host-1',
+    code: 'HOST01',
+    title: 'تحدي الـ30 ثانية',
+    bankId: 'bank-general-mosque',
+    bankName: 'البنك العام',
+    ageGroup: 'family',
+    difficulty: 'mixed',
+    category: 'الكل',
+    phase: 'vs',
+    teams: [
+      { index: 0, name: 'صقور عمّان', color: '#38BDF8', points: 0, strikes: 0, streak: 0, participantIds: [], participantNames: [] },
+      { index: 1, name: 'نشامى إربد', color: '#FF68A0', points: 0, strikes: 0, streak: 0, participantIds: [], participantNames: [] },
+    ],
+    activeTeamIndex: 0,
+    buzzedTeamIndex: null,
+    failedBuzzTeams: [],
+    rounds: buildDefaultRoundConfigs(['rapid_fire', 'buzzer', 'bid_challenge', 'golden']),
+    currentRoundIndex: 0,
+    currentQuestionIndexInRound: 0,
+    timerRemainingSec: 30,
+    timerRunning: false,
+    timerEndsAtMs: null,
+    answerRevealed: false,
+    revealedClueCount: 1,
+    memoryPhase: 'none',
+    memoryRemainingSec: 0,
+    bidState: null,
+    exhaustedNotice: null,
+    lastFeedback: null,
+    settings: {
+      soundEnabled: true,
+      calmMode: true,
+      reducedMotion: false,
+      allowGuestMode: true,
+      defaultTimerSec: 30,
+      strikesLimit: 3,
+      showMode: true,
+    },
+    currentQuestion: null,
+    updatedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+test('HostReactionEngine covers all 12 round intros, streaks, errors, timeouts, buzzer speed, bidding, close scores, and visual moods', () => {
+  for (const rt of ALL_ROUND_TYPES) {
+    assert.ok(ROUND_HOST_INTROS[rt].length >= 2, `Missing host intros for ${rt}`);
+  }
+
+  const engine = new HostReactionEngine();
+  let t = 10_000;
+
+  // 1. VS welcome -> hyped
+  const vsStep = engine.step(makeLiveSessionView({ phase: 'vs' }), { nowMs: t });
+  assert.equal(vsStep.emitted?.kind, 'match_welcome');
+  assert.equal(vsStep.mood, 'hyped');
+
+  // 2. Round 0 start (rapid_fire) -> round_start hyped
+  t += 1000;
+  const r0Step = engine.step(
+    makeLiveSessionView({ phase: 'round_intro', currentRoundIndex: 0 }),
+    { nowMs: t, rng: () => 0 }
+  );
+  assert.equal(r0Step.emitted?.kind, 'round_start');
+  assert.equal(r0Step.mood, 'hyped');
+  assert.match(r0Step.emitted!.text, /الرشاش/);
+
+  // 3. Streak praise -> celebrating
+  t += 1500;
+  const streakStep = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      timerRunning: true,
+      timerRemainingSec: 22,
+      currentQuestion: {
+        id: 'q1',
+        bankId: 'bank-general-mosque',
+        roundType: 'rapid_fire',
+        category: 'الكل',
+        ageGroup: 'family',
+        difficulty: 'medium',
+        prompt: 'سؤال',
+        options: [],
+        cluesCount: 0,
+        revealedClues: [],
+        memoryPhase: 'none',
+        memoryRemainingSec: 0,
+        isReligious: true,
+      },
+      teams: [
+        { index: 0, name: 'صقور عمّان', color: '#38BDF8', points: 4, strikes: 0, streak: 3, participantIds: [], participantNames: [] },
+        { index: 1, name: 'نشامى إربد', color: '#FF68A0', points: 2, strikes: 0, streak: 0, participantIds: [], participantNames: [] },
+      ],
+      lastFeedback: { type: 'streak', message: 'ثلاثية!', pointsDelta: 2, teamIndex: 0, atMs: t },
+    }),
+    { nowMs: t, rng: () => 0 }
+  );
+  assert.equal(streakStep.emitted?.kind, 'streak');
+  assert.equal(streakStep.mood, 'celebrating');
+  assert.ok(
+    HOST_COMMENTARY_BANK.streak.some((line) => streakStep.emitted!.text === line),
+    `Expected streak phrase from bank, got: ${streakStep.emitted!.text}`
+  );
+
+  // 4. Wrong answer -> teasing
+  t += 1200;
+  const wrongStep = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      timerRunning: true,
+      timerRemainingSec: 18,
+      lastFeedback: { type: 'wrong', message: 'خطأ', pointsDelta: 0, teamIndex: 1, atMs: t },
+    }),
+    { nowMs: t, rng: () => 0 }
+  );
+  assert.equal(wrongStep.emitted?.kind, 'wrong');
+  assert.equal(wrongStep.mood, 'teasing');
+
+  // 5. Urgent <= 5s overrides to 'tense'
+  t += 5000;
+  const tenseMood = resolveNashmiVisualMood(
+    makeLiveSessionView({
+      phase: 'playing',
+      timerRunning: true,
+      timerRemainingSec: 4,
+    }),
+    wrongStep.reaction,
+    t
+  );
+  assert.equal(tenseMood, 'tense');
+
+  // 6. Time out -> shocked
+  t += 4000;
+  const timeoutStep = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      timerRunning: false,
+      timerRemainingSec: 0,
+      answerRevealed: false,
+      currentQuestion: {
+        id: 'q-to',
+        bankId: 'b',
+        roundType: 'rapid_fire',
+        category: 'الكل',
+        ageGroup: 'family',
+        difficulty: 'medium',
+        prompt: 'سؤال',
+        options: [],
+        cluesCount: 0,
+        revealedClues: [],
+        memoryPhase: 'none',
+        memoryRemainingSec: 0,
+        isReligious: true,
+      },
+    }),
+    { nowMs: t, rng: () => 0 }
+  );
+  assert.equal(timeoutStep.emitted?.kind, 'timeout');
+  assert.equal(timeoutStep.mood, 'shocked');
+  assert.match(timeoutStep.emitted!.text, /30 ثانية|الوقت/);
+
+  // 7. Buzzer fast reflex (< 2.5s)
+  t += 2000;
+  engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      currentRoundIndex: 1,
+      timerRunning: true,
+      timerRemainingSec: 30,
+      buzzedTeamIndex: null,
+      currentQuestion: {
+        id: 'q-buz',
+        bankId: 'b',
+        roundType: 'buzzer',
+        category: 'الكل',
+        ageGroup: 'family',
+        difficulty: 'medium',
+        prompt: 'سؤال جرس',
+        options: [],
+        cluesCount: 0,
+        revealedClues: [],
+        memoryPhase: 'none',
+        memoryRemainingSec: 0,
+        isReligious: true,
+      },
+    }),
+    { nowMs: t }
+  );
+  t += 900; // Pressed in 0.9s!
+  const buzzStep = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      currentRoundIndex: 1,
+      timerRunning: true,
+      timerRemainingSec: 29,
+      buzzedTeamIndex: 1,
+      currentQuestion: {
+        id: 'q-buz',
+        bankId: 'b',
+        roundType: 'buzzer',
+        category: 'الكل',
+        ageGroup: 'family',
+        difficulty: 'medium',
+        prompt: 'سؤال جرس',
+        options: [],
+        cluesCount: 0,
+        revealedClues: [],
+        memoryPhase: 'none',
+        memoryRemainingSec: 0,
+        isReligious: true,
+      },
+    }),
+    { nowMs: t }
+  );
+  assert.equal(buzzStep.emitted?.kind, 'buzzer_fast');
+  assert.ok(
+    HOST_COMMENTARY_BANK.buzzer_fast.some((line) => buzzStep.emitted!.text.startsWith(line)),
+    `Expected buzzer_fast phrase from bank, got: ${buzzStep.emitted!.text}`
+  );
+
+  // 8. Bid challenge bold bid & challenge
+  t += 2000;
+  engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      currentRoundIndex: 2,
+      timerRunning: false,
+      bidState: {
+        phase: 'bidding',
+        currentBid: 2,
+        bidderTeamIndex: 0,
+        startingTeamIndex: 0,
+        turnTeamIndex: 1,
+        maxPossible: 6,
+        challenged: false,
+        acceptedAnswers: [],
+      },
+    }),
+    { nowMs: t }
+  );
+  t += 1000;
+  const boldBidStep = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      currentRoundIndex: 2,
+      timerRunning: false,
+      bidState: {
+        phase: 'bidding',
+        currentBid: 4,
+        bidderTeamIndex: 1,
+        startingTeamIndex: 0,
+        turnTeamIndex: 0,
+        maxPossible: 6,
+        challenged: false,
+        acceptedAnswers: [],
+      },
+    }),
+    { nowMs: t, rng: () => 0 }
+  );
+  assert.equal(boldBidStep.emitted?.kind, 'bid_bold');
+  assert.equal(boldBidStep.mood, 'thinking');
+
+  t += 1000;
+  const bidExecStep = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      currentRoundIndex: 2,
+      timerRunning: true,
+      timerRemainingSec: 30,
+      bidState: {
+        phase: 'executing',
+        currentBid: 4,
+        bidderTeamIndex: 1,
+        startingTeamIndex: 0,
+        turnTeamIndex: 0,
+        maxPossible: 6,
+        challenged: true,
+        acceptedAnswers: [],
+      },
+    }),
+    { nowMs: t }
+  );
+  assert.equal(bidExecStep.emitted?.kind, 'bid_challenge');
+  assert.equal(bidExecStep.mood, 'tense');
+
+  // 9. Lead change / comeback in golden round -> celebrating
+  t += 1500;
+  const comebackStep = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      currentRoundIndex: 3,
+      timerRunning: true,
+      timerRemainingSec: 20,
+      teams: [
+        { index: 0, name: 'صقور عمّان', color: '#38BDF8', points: 10, strikes: 0, streak: 0, participantIds: [], participantNames: [] },
+        { index: 1, name: 'نشامى إربد', color: '#FF68A0', points: 11, strikes: 0, streak: 1, participantIds: [], participantNames: [] },
+      ],
+      lastFeedback: { type: 'lead_change', message: 'تبدل!', pointsDelta: 2, teamIndex: 1, atMs: t },
+    }),
+    { nowMs: t }
+  );
+  assert.equal(comebackStep.emitted?.kind, 'comeback');
+  assert.equal(comebackStep.mood, 'celebrating');
+  assert.ok(
+    HOST_COMMENTARY_BANK.comeback.some((line) => comebackStep.emitted!.text.startsWith(line)),
+    `Expected comeback phrase from bank, got: ${comebackStep.emitted!.text}`
+  );
+
+  // 10. Victory celebration
+  t += 2000;
+  const winStep = engine.step(
+    makeLiveSessionView({
+      phase: 'finished',
+      teams: [
+        { index: 0, name: 'صقور عمّان', color: '#38BDF8', points: 10, strikes: 0, streak: 0, participantIds: [], participantNames: [] },
+        { index: 1, name: 'نشامى إربد', color: '#FF68A0', points: 14, strikes: 0, streak: 2, participantIds: [], participantNames: [] },
+      ],
+    }),
+    { nowMs: t }
+  );
+  assert.equal(winStep.emitted?.kind, 'victory');
+  assert.equal(winStep.mood, 'celebrating');
+  assert.match(winStep.emitted!.text, /نشامى إربد/);
+});
+
+test('HOST_COMMENTARY_BANK contains over 80 unique vibrant Jordanian phrases including all requested categories', () => {
+  const totalCount = getTotalHostCommentaryCount();
+  assert.ok(totalCount > 80, `Expected > 80 phrases, found ${totalCount}`);
+
+  const allLines = Object.values(HOST_COMMENTARY_BANK).flat();
+  assert.equal(allLines.length, totalCount);
+  assert.equal(new Set(allLines).size, allLines.length, 'Every phrase in HOST_COMMENTARY_BANK should be unique');
+
+  const expectedByCategory: Array<[keyof typeof HOST_COMMENTARY_BANK, string[]]> = [
+    [
+      'correct',
+      [
+        'يا عيني عالقطاعة! جبتها من نص الجول!',
+        'وحش والله، مخّك شغّال نار اليوم!',
+        'عفيه عليكم، ولا غلطة!',
+        'سجّل عندك، نقطة ولا أروع!',
+        'كفو والله، هيك اللعب ولا بلاش!',
+        'ما شاء الله، تركيز مليون!',
+        'بالصميم! ما أعطيتوا مجال للتفكير!',
+        'يا سلام عليك، إجابة معلم!',
+      ],
+    ],
+    [
+      'streak',
+      [
+        'ولّعت الصالة! ما حدا قادر يوقفهم!',
+        'هاتريك يا كبير! شو هالتركيز؟',
+        'يا ساتر، الفريق هاظ داخل يكسر الدنيا!',
+        'قطار وماشي، مين بده يوقفه؟',
+        'نار يا حبيبي نار، سلسلة ولا أجمل!',
+      ],
+    ],
+    [
+      'wrong',
+      [
+        'هاردلك، قربتوا كثير بس زحلطت!',
+        'يا حرام، كانت عطرف اللسان!',
+        'مش مشكلة، الجايات أكثر من الرايحات!',
+        'ركزوا يا شباب، التسرع ضيّعها!',
+        'أوف، راحت عليكم بنص ثانية!',
+        'لا تزعلوا، لسا الملعب طويل!',
+      ],
+    ],
+    [
+      'timeout',
+      [
+        'طارت الـ 30 ثانية زي البرق!',
+        'يا ساتر، الجرس ما بيرحم!',
+        'صفّرت الساعة، راحت النقطة!',
+        'الوقت كالسيف، أسرع المرة الجاية يا شباب!',
+        'خلص البنزين، انتهى الوقت!',
+      ],
+    ],
+    [
+      'buzzer_fast',
+      [
+        'يا لطيف شو هالسرعة! أصبعك عالزناد!',
+        'سبقهم بلمح البصر!',
+      ],
+    ],
+    [
+      'bid_bold',
+      [
+        'مين يزوّد؟ الميدان يا حميدان!',
+        'يا عيني عالثقة، قدّها وقدود؟',
+        'رفع السقف عالآخر، خلينا نشوف الشطارة!',
+        'المزاد ولّع، والكل بده يكسب!',
+      ],
+    ],
+    [
+      'comeback',
+      ['يا ساتر عالريمونتادا! قلبوا الطاولة!'],
+    ],
+    [
+      'close_score',
+      [
+        'الفرق شعرة، النفس الأخير هو اللي بيحسم!',
+        'الجولة الذهبية رح تقلب الموازين!',
+      ],
+    ],
+    [
+      'victory',
+      [
+        'مبروك للأبطال! فوز مستحق عن جدارة!',
+        'رفعتوا الراس، مباراة للتاريخ!',
+      ],
+    ],
+  ];
+
+  for (const [category, phrases] of expectedByCategory) {
+    const pool = HOST_COMMENTARY_BANK[category] as readonly string[];
+    for (const phrase of phrases) {
+      assert.ok(pool.includes(phrase), `Missing phrase in ${category}: ${phrase}`);
+    }
+  }
+});
+
+test('pickNonRepeatingFromPool exhausts every item before resetting and avoids back-to-back repeats on reset', () => {
+  const rngPatterns: Array<() => number> = [
+    () => 0,
+    () => 0.9999,
+    (() => {
+      let step = 0;
+      return () => ((step++ * 0.37) % 1);
+    })(),
+  ];
+
+  for (const rng of rngPatterns) {
+    let usedPools: Record<string, number[]> = {};
+    const pool = HOST_COMMENTARY_BANK.correct;
+    const seenFirstCycle: string[] = [];
+
+    for (let i = 0; i < pool.length; i++) {
+      const res = pickNonRepeatingFromPool('correct', pool, usedPools, rng);
+      usedPools = res.nextUsedPools;
+      seenFirstCycle.push(res.chosen);
+    }
+
+    assert.equal(new Set(seenFirstCycle).size, pool.length, 'First full cycle must emit every item once with zero repeats');
+
+    const firstAfterReset = pickNonRepeatingFromPool('correct', pool, usedPools, rng);
+    assert.notEqual(
+      firstAfterReset.chosen,
+      seenFirstCycle[seenFirstCycle.length - 1],
+      'Cycle reset must not repeat the immediately preceding phrase'
+    );
+  }
+});
+
+test('HostReactionEngine never repeats phrases in a category until all phrases in that pool are used', () => {
+  const engine = new HostReactionEngine();
+  let t = 50_000;
+
+  // Trigger round_start once first so round_start never shadows feedback
+  engine.step(makeLiveSessionView({ phase: 'playing', currentRoundIndex: 0 }), { nowMs: t, rng: () => 0.25 });
+
+  // Exhaust entire 'correct' pool
+  const emittedCorrect: string[] = [];
+  for (let i = 0; i < HOST_COMMENTARY_BANK.correct.length; i++) {
+    t += 1000;
+    const res = engine.step(
+      makeLiveSessionView({
+        phase: 'playing',
+        currentRoundIndex: 0,
+        lastFeedback: { type: 'correct', message: 'صح!', pointsDelta: 1, teamIndex: 0, atMs: t },
+      }),
+      { nowMs: t, rng: () => (i * 0.61) % 1 }
+    );
+    assert.equal(res.emitted?.kind, 'correct');
+    emittedCorrect.push(res.emitted!.text);
+  }
+  assert.equal(new Set(emittedCorrect).size, HOST_COMMENTARY_BANK.correct.length);
+
+  // Next 'correct' after exhaustion starts a new cycle without back-to-back repeat
+  t += 1000;
+  const resetCorrect = engine.step(
+    makeLiveSessionView({
+      phase: 'playing',
+      currentRoundIndex: 0,
+      lastFeedback: { type: 'correct', message: 'صح!', pointsDelta: 1, teamIndex: 0, atMs: t },
+    }),
+    { nowMs: t, rng: () => 0 }
+  );
+  assert.equal(resetCorrect.emitted?.kind, 'correct');
+  assert.notEqual(resetCorrect.emitted!.text, emittedCorrect[emittedCorrect.length - 1]);
+
+  // Exhaust entire 'wrong' and 'timeout' pools
+  const emittedWrong: string[] = [];
+  for (let i = 0; i < HOST_COMMENTARY_BANK.wrong.length; i++) {
+    t += 1000;
+    const res = engine.step(
+      makeLiveSessionView({
+        phase: 'playing',
+        currentRoundIndex: 0,
+        lastFeedback: { type: 'wrong', message: 'خطأ', pointsDelta: 0, teamIndex: 1, atMs: t },
+      }),
+      { nowMs: t, rng: () => 0 }
+    );
+    assert.equal(res.emitted?.kind, 'wrong');
+    emittedWrong.push(res.emitted!.text);
+  }
+  assert.equal(new Set(emittedWrong).size, HOST_COMMENTARY_BANK.wrong.length);
+
+  const emittedTimeouts: string[] = [];
+  for (let i = 0; i < HOST_COMMENTARY_BANK.timeout.length; i++) {
+    t += 1000;
+    const res = engine.step(
+      makeLiveSessionView({
+        phase: 'playing',
+        currentRoundIndex: 0,
+        timerRunning: false,
+        timerRemainingSec: 0,
+        answerRevealed: false,
+        currentQuestion: {
+          id: `q-timeout-${i}`,
+          bankId: 'b',
+          roundType: 'rapid_fire',
+          category: 'الكل',
+          ageGroup: 'family',
+          difficulty: 'medium',
+          prompt: `سؤال ${i}`,
+          options: [],
+          cluesCount: 0,
+          revealedClues: [],
+          memoryPhase: 'none',
+          memoryRemainingSec: 0,
+          isReligious: true,
+        },
+      }),
+      { nowMs: t, rng: () => 0.99 }
+    );
+    assert.equal(res.emitted?.kind, 'timeout');
+    emittedTimeouts.push(res.emitted!.text);
+  }
+  assert.equal(new Set(emittedTimeouts).size, HOST_COMMENTARY_BANK.timeout.length);
+});
+

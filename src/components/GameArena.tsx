@@ -32,6 +32,7 @@ import { apiFetch, getAuthToken, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
 import { PlayerAvatar, SessionQrBadge } from './BrandEmblem';
 
+import { NashmiStageHost } from './ShowArt';
 import { ShowArena } from './ShowArena';
 import { useShowCountdown, useShowSound } from './ShowPresentation';
 
@@ -112,8 +113,12 @@ export function GameArena({
     }
   }, [qId, qOptionsKey, session.currentQuestion?.roundType]);
 
-  // Show pre-round rule intro card once when entering round 0 if !hasShownIntro
   useEffect(() => {
+    const round = session.rounds[session.currentRoundIndex];
+    soundFx.setRoundContext(round?.roundType, round?.goldenTargetType);
+    if (!session.settings.showMode && session.phase === 'playing' && lastRoundIntroRef.current !== session.currentRoundIndex) {
+      soundFx.roundStart(round?.roundType, round?.goldenTargetType);
+    }
     if (
       !session.settings.showMode && session.phase === 'playing' &&
       session.hasShownIntro === false &&
@@ -122,11 +127,12 @@ export function GameArena({
       lastRoundIntroRef.current = session.currentRoundIndex;
       setShowRulesModal(true);
     }
-  }, [session.phase, session.hasShownIntro, session.currentRoundIndex]);
+  }, [session.phase, session.hasShownIntro, session.currentRoundIndex, session.rounds, session.settings.showMode]);
 
   useEffect(() => {
     if (session.lastFeedback && session.lastFeedback.atMs !== prevFeedbackAt.current) {
       prevFeedbackAt.current = session.lastFeedback.atMs;
+      const rt = session.rounds[session.currentRoundIndex]?.roundType;
       if (session.settings.showMode && session.lastFeedback.type === 'streak') soundFx.combo();
       else if (session.settings.showMode && session.lastFeedback.type === 'lead_change') soundFx.lead();
       else if (
@@ -135,12 +141,12 @@ export function GameArena({
         session.lastFeedback.type === 'streak' ||
         session.lastFeedback.type === 'lead_change'
       ) {
-        soundFx.correct();
+        soundFx.correct(rt);
       } else if (session.lastFeedback.type === 'wrong') {
-        soundFx.wrong();
+        soundFx.wrong(rt);
       }
     }
-  }, [session.lastFeedback]);
+  }, [session.lastFeedback, session.rounds, session.currentRoundIndex, session.settings.showMode]);
 
   useEffect(() => {
     if (
@@ -151,15 +157,15 @@ export function GameArena({
       lastUrgentTick.current !== session.timerRemainingSec
     ) {
       lastUrgentTick.current = session.timerRemainingSec;
-      soundFx.tickUrgent();
+      soundFx.tickUrgent(session.rounds[session.currentRoundIndex]?.roundType);
     }
-  }, [session.phase, session.timerRunning, session.timerRemainingSec]);
+  }, [session.phase, session.timerRunning, session.timerRemainingSec, session.rounds, session.currentRoundIndex, session.settings.showMode]);
 
   useEffect(() => {
     if (!session.settings.showMode && session.phase === 'finished') {
-      soundFx.victory();
+      soundFx.victory(determineWinner(session.teams).isTie);
     }
-  }, [session.phase]);
+  }, [session.phase, session.teams, session.settings.showMode]);
 
   useEffect(() => {
     if (session.settings.showMode) return;
@@ -452,6 +458,7 @@ export function GameArena({
             </div>
           )}
         </div>
+        <NashmiStageHost session={session} onOpenBot={onOpenBot} placement="classic" />
       </div>
     );
   }
@@ -697,12 +704,6 @@ export function GameArena({
               <CheckCircle2 className="w-4 h-4 shrink-0" />
             )}
             <span>{session.lastFeedback.message}</span>
-          </div>
-        )}
-
-        {session.settings.botOpponent?.enabled && session.botChat && (
-          <div className="rounded-xl px-4 py-2.5 text-sm font-bold bg-[#FFF7E3] text-[#29183E] border-2 border-[#29183E] flex items-center justify-between gap-3">
-            <span>{session.settings.botOpponent.personaName || 'نشمي'}: {session.botChat.text}</span>
           </div>
         )}
 
@@ -1334,6 +1335,7 @@ export function GameArena({
           </div>
         ) : null}
       </main>
+      <NashmiStageHost session={session} onOpenBot={onOpenBot} placement="classic" />
 
       {/* Pre-round Rules Intro Modal */}
       {showRulesModal && roundMeta && (

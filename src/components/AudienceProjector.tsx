@@ -3,7 +3,7 @@ import { ArrowRight, Volume2, VolumeX } from 'lucide-react';
 import type { GameSessionView } from '../shared/types';
 import { apiFetch, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
-import { ShowMark } from './ShowArt';
+import { NashmiStageHost, ShowMark } from './ShowArt';
 import { ChallengeDisplay, ScoreRibbon, ShowIntermission, useShowCountdown, useShowSound } from './ShowPresentation';
 import { SessionQrBadge } from './BrandEmblem';
 
@@ -37,16 +37,17 @@ export function AudienceProjector({ code, onExit }: { code: string; onExit: () =
   useShowSound(session, countdown);
   useEffect(() => {
     if (!session) return;
+    const rt = session.rounds[session.currentRoundIndex]?.roundType;
     if (session.buzzedTeamIndex !== null && buzzer.current !== session.buzzedTeamIndex) soundFx.buzz();
     buzzer.current = session.buzzedTeamIndex;
     const last = session.lastFeedback;
     if (!last || last.atMs === feedback.current) return;
     feedback.current = last.atMs;
     if (Date.now() - last.atMs > 2400) return;
-    if (last.type === 'wrong') soundFx.wrong();
+    if (last.type === 'wrong') soundFx.wrong(rt);
     else if (last.type === 'streak') soundFx.combo();
     else if (last.type === 'lead_change') soundFx.lead();
-    else if (last.type === 'correct' || last.type === 'golden') soundFx.correct();
+    else if (last.type === 'correct' || last.type === 'golden') soundFx.correct(rt);
   }, [session]);
 
   if (!session) return <div className="show-stage show-stage--loading"><ShowMark /><p role="status">{error || 'لحظة… عم نربط شاشة الجمهور.'}</p>{error && <button className="show-button show-button--cream" onClick={onExit}>الرجوع</button>}</div>;
@@ -71,6 +72,7 @@ export function AudienceProjector({ code, onExit }: { code: string; onExit: () =
           <span>امسح الرمز بهاتف المشرف</span>
         </div>}
       </main>
+      <NashmiStageHost session={session} />
     </div>
   );
 }

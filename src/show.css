@@ -613,3 +613,283 @@
   }
 }
 
+/* ================= NASHMI ANIMATED STAGE HOST ================= */
+@keyframes nashmi-idle-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-6px) rotate(-2deg); }
+}
+
+@keyframes nashmi-hyped-bounce {
+  0%, 100% { transform: translateY(0) rotate(-2deg) scale(1); }
+  35% { transform: translateY(-9px) rotate(4deg) scale(1.05); }
+  65% { transform: translateY(-3px) rotate(-3deg) scale(1.02); }
+}
+
+@keyframes nashmi-think-tilt {
+  0%, 100% { transform: rotate(-5deg) translateY(0); }
+  50% { transform: rotate(4deg) translateY(-3px); }
+}
+
+@keyframes nashmi-think-scan {
+  0%, 100% { transform: translateX(-1.4px); }
+  50% { transform: translateX(1.4px); }
+}
+
+@keyframes nashmi-tense-shake {
+  0%, 100% { transform: translate(0, 0) scale(1.02); }
+  25% { transform: translate(-2.5px, -1.5px) rotate(-3deg) scale(1.04); }
+  50% { transform: translate(2.5px, 1px) rotate(3deg) scale(1.05); }
+  75% { transform: translate(-2px, 1.5px) rotate(-2deg) scale(1.04); }
+}
+
+@keyframes nashmi-celebrate-jump {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  20% { transform: translateY(2px) scale(1.06, 0.94); }
+  50% { transform: translateY(-14px) rotate(-4deg) scale(1.05, 1.05); }
+  80% { transform: translateY(-4px) rotate(4deg) scale(1.02, 1.02); }
+}
+
+@keyframes nashmi-shock-jolt {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  20% { transform: scale(1.08) rotate(-7deg) translateY(-4px); }
+  55% { transform: scale(0.97) rotate(4deg); }
+}
+
+@keyframes nashmi-tease-wink {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  40% { transform: rotate(-6deg) translateY(-4px); }
+  70% { transform: rotate(4deg) translateY(-2px); }
+}
+
+@keyframes nashmi-sparkle-twinkle {
+  0%, 100% { opacity: 0.7; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.12); }
+}
+
+.nashmi-mascot-svg {
+  overflow: visible;
+  transform-origin: center;
+}
+
+.nashmi-mascot--idle {
+  animation: nashmi-idle-float 3.6s ease-in-out infinite;
+}
+.nashmi-mascot--hyped {
+  animation: nashmi-hyped-bounce 1.45s ease-in-out infinite;
+}
+.nashmi-mascot--thinking .nashmi-svg__head {
+  transform-origin: 32px 30px;
+  animation: nashmi-think-tilt 2.8s ease-in-out infinite;
+}
+.nashmi-mascot--thinking .nashmi-svg__pupils {
+  animation: nashmi-think-scan 1.8s ease-in-out infinite;
+}
+.nashmi-mascot--tense {
+  animation: nashmi-tense-shake 0.36s linear infinite;
+}
+.nashmi-mascot--celebrating {
+  animation: nashmi-celebrate-jump 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+.nashmi-mascot--shocked {
+  animation: nashmi-shock-jolt 0.85s ease-in-out infinite;
+}
+.nashmi-mascot--teasing .nashmi-svg__head {
+  transform-origin: 32px 30px;
+  animation: nashmi-tease-wink 2.2s ease-in-out infinite;
+}
+.nashmi-svg__sparkles {
+  transform-origin: center;
+  animation: nashmi-sparkle-twinkle 1s ease-in-out infinite;
+}
+
+.show-stage:not(.show-arena) .show-scoreboard,
+.show-stage:not(.show-arena) .show-challenge {
+  max-width: 900px;
+  width: 100%;
+  margin-inline: auto;
+}
+
+.nashmi-stage-host {
+  position: fixed;
+  inset-block-end: 16px;
+  inset-inline-end: 16px;
+  z-index: 25;
+  width: 196px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.nashmi-stage-host__bubble {
+  position: relative;
+  width: 100%;
+  padding: 10px 12px;
+  border: 2.5px solid var(--show-ink);
+  border-radius: 18px 18px 18px 6px;
+  background: #fff7e3;
+  color: var(--show-ink);
+  box-shadow: 0 5px 0 var(--show-ink);
+  pointer-events: auto;
+  animation: nashmi-pop .2s ease both;
+}
+
+.nashmi-stage-host__bubble::after {
+  content: '';
+  position: absolute;
+  inset-block-end: -9px;
+  inset-inline-end: 24px;
+  width: 14px;
+  height: 14px;
+  background: #fff7e3;
+  border-inline-end: 2.5px solid var(--show-ink);
+  border-block-end: 2.5px solid var(--show-ink);
+  transform: rotate(45deg);
+}
+
+.nashmi-stage-host--celebrating .nashmi-stage-host__bubble {
+  background: #e6fff2;
+}
+.nashmi-stage-host--celebrating .nashmi-stage-host__bubble::after {
+  background: #e6fff2;
+}
+.nashmi-stage-host--tense .nashmi-stage-host__bubble {
+  background: #ffe8ef;
+}
+.nashmi-stage-host--tense .nashmi-stage-host__bubble::after {
+  background: #ffe8ef;
+}
+.nashmi-stage-host--shocked .nashmi-stage-host__bubble {
+  background: #e3f7ff;
+}
+.nashmi-stage-host--shocked .nashmi-stage-host__bubble::after {
+  background: #e3f7ff;
+}
+
+.nashmi-stage-host__speaker {
+  display: block;
+  font-size: .72rem;
+  font-weight: 900;
+  color: #5b25b5;
+  margin-bottom: 2px;
+}
+
+.nashmi-stage-host__bubble p {
+  margin: 0;
+  font-size: .84rem;
+  font-weight: 800;
+  line-height: 1.45;
+  color: var(--show-ink);
+}
+
+.nashmi-stage-host__avatar {
+  pointer-events: auto;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 8px 6px;
+  border-radius: 18px;
+  border: 2.5px solid var(--show-ink);
+  background: #fff7e3;
+  box-shadow: 0 5px 0 var(--show-ink);
+  transition: transform .14s ease, box-shadow .14s ease;
+}
+
+button.nashmi-stage-host__avatar:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 7px 0 var(--show-ink);
+}
+
+.nashmi-stage-host__badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--show-yellow);
+  border: 1.5px solid var(--show-ink);
+  color: var(--show-ink);
+  font-size: .68rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.nashmi-stage-host--tense .nashmi-stage-host__badge {
+  background: #ff68a0;
+  color: #fff9ed;
+}
+.nashmi-stage-host--celebrating .nashmi-stage-host__badge {
+  background: var(--show-mint);
+}
+.nashmi-stage-host--shocked .nashmi-stage-host__badge {
+  background: var(--show-blue);
+}
+
+@media (max-width: 1380px) {
+  .nashmi-stage-host {
+    position: static;
+    width: min(100%, 760px);
+    margin: 12px auto 0;
+    flex-direction: row-reverse;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .nashmi-stage-host__bubble {
+    flex: 1;
+    min-width: 0;
+    border-radius: 16px;
+    padding: 8px 12px;
+  }
+  .nashmi-stage-host__bubble::after {
+    display: none;
+  }
+  .nashmi-stage-host__avatar {
+    flex-direction: row;
+    gap: 6px;
+    padding: 4px 10px 4px 6px;
+    flex-shrink: 0;
+  }
+  .nashmi-stage-host__avatar svg {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (max-width: 620px) {
+  .nashmi-stage-host {
+    margin-top: 8px;
+    gap: 8px;
+  }
+  .nashmi-stage-host__bubble p {
+    font-size: .78rem;
+  }
+  .nashmi-stage-host__badge {
+    display: none;
+  }
+  .nashmi-stage-host__avatar {
+    padding: 4px;
+    border-radius: 14px;
+  }
+  .nashmi-stage-host__avatar svg {
+    width: 38px;
+    height: 38px;
+  }
+}
+
+:is(.reduce-motion, .reduce-motion *) .nashmi-mascot-svg,
+:is(.reduce-motion, .reduce-motion *) .nashmi-svg__head,
+:is(.reduce-motion, .reduce-motion *) .nashmi-svg__pupils,
+:is(.reduce-motion, .reduce-motion *) .nashmi-svg__sparkles {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nashmi-mascot-svg,
+  .nashmi-svg__head,
+  .nashmi-svg__pupils,
+  .nashmi-svg__sparkles {
+    animation: none !important;
+  }
+}
+
+

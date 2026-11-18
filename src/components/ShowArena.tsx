@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, ArrowUp, Bell, Pause, Play, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { normalizeChallengeItem } from '../shared/gameRules';
 import type { GameSessionView } from '../shared/types';
-import { NashmiMascot, ShowMark } from './ShowArt';
+import { NashmiMascot, NashmiStageHost, ShowMark } from './ShowArt';
 import { ChallengeDisplay, ScoreRibbon, ShowIntermission, useShowCountdown } from './ShowPresentation';
 
 type Action = (action: string, payload?: Record<string, unknown>) => Promise<void>;
@@ -174,17 +174,6 @@ export function ShowArena(props: ShowArenaProps) {
     </header>
     <main className="show-stage__main">
       {session.phase !== 'vs' && <ScoreRibbon session={session} />}
-      {botActive && session.botChat && (
-        <div className="nashmi-arena-chat" role="status" aria-live="polite" key={session.botChat.id}>
-          <div className="nashmi-arena-chat__lead">
-            <NashmiMascot size={32} mood={session.botChat.mood} />
-            <div>
-              <strong>نشمي:</strong>
-              <span>{session.botChat.text}</span>
-            </div>
-          </div>
-        </div>
-      )}
       {playing ? <ChallengeDisplay session={session} controls /> : <ShowIntermission session={session} countdown={countdown} />}
       {playing && q && <PlayerInputs key={q.id} {...props} />}
       {playing && session.bidState?.phase !== 'bidding' && !session.answerRevealed && session.timerRemainingSec === 0 && canControl && session.bidState &&
@@ -200,5 +189,6 @@ export function ShowArena(props: ShowArenaProps) {
         {session.phase === 'finished' && <button type="button" className="show-button show-button--yellow" onClick={props.onReplay}>مباراة جديدة</button>}
       </div>}
     </main>
+    <NashmiStageHost session={session} onOpenBot={props.onOpenBot} />
   </div>;
 }

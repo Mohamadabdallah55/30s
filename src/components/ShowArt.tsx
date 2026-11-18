@@ -1,4 +1,12 @@
-import type { RoundType } from '../shared/types';
+import { useEffect, useRef, useState } from 'react';
+import {
+  HostReactionEngine,
+  resolveNashmiVisualMood,
+  type HostReaction,
+  type NashmiHostMood,
+} from '../shared/jordanianBot';
+import type { GameSessionView, RoundType } from '../shared/types';
+import { soundFx } from '../utils/sound';
 
 export const showRounds: Record<RoundType, { color: string; tag: string; art: string }> = {
   rapid_fire: { color: '#FFE45A', tag: 'شدّ حيلك… الرشّاش بلّش!', art: 'M28 6 11 26h12l-3 16 18-22H25z M7 12h10M4 19h10M6 34h7' },
@@ -44,68 +52,318 @@ export function ShowMark() {
   );
 }
 
+export type NashmiMascotMoodInput =
+  | NashmiHostMood
+  | 'hype'
+  | 'happy'
+  | 'tease'
+  | 'gg';
+
+function normalizeMascotMood(mood: NashmiMascotMoodInput = 'idle'): NashmiHostMood {
+  switch (mood) {
+    case 'hype':
+      return 'hyped';
+    case 'happy':
+      return 'idle';
+    case 'gg':
+      return 'celebrating';
+    case 'tease':
+      return 'teasing';
+    default:
+      return mood;
+  }
+}
+
 export function NashmiMascot({
   size = 38,
-  mood = 'happy',
+  mood = 'idle',
+  animated = true,
   className = '',
 }: {
   size?: number;
-  mood?: 'hype' | 'thinking' | 'happy' | 'tease' | 'gg';
+  mood?: NashmiMascotMoodInput;
+  animated?: boolean;
   className?: string;
 }) {
+  const m = normalizeMascotMood(mood);
+  const badgeFill =
+    m === 'tense'
+      ? '#FF5484'
+      : m === 'celebrating'
+      ? '#4EDB9A'
+      : m === 'shocked'
+      ? '#42C9FF'
+      : m === 'teasing'
+      ? '#F59E0B'
+      : '#874CF5';
+
+  const leftEyeR = m === 'tense' || m === 'shocked' ? 5.1 : 4.2;
+  const rightEyeR = m === 'tense' || m === 'shocked' ? 5.1 : 4.2;
+  const pupilR = m === 'tense' ? 1.45 : m === 'shocked' ? 1.3 : 1.9;
+
   return (
     <svg
-      className={className}
+      className={`nashmi-mascot-svg ${animated ? `nashmi-mascot--${m}` : ''} ${className}`}
+      data-mood={m}
       width={size}
       height={size}
       viewBox="0 0 64 64"
       aria-hidden="true"
     >
-      {/* Purple comic speech badge background */}
+      {/* Purple / Dynamic comic speech badge background */}
       <path
         d="M32 5C16.5 5 6 15.8 6 29.8c0 7.1 3 13.4 8 17.8L10 57l11.2-4.6c3.3 1.2 7 1.8 10.8 1.8 15.5 0 26-10.8 26-24.4C58 15.8 47.5 5 32 5Z"
-        fill="#874CF5"
+        fill={badgeFill}
         stroke="#29183E"
         strokeWidth="3.5"
         strokeLinejoin="round"
       />
-      {/* Star head */}
-      <path
-        d="m32 13 4.8 9.2 10.2 1.6-7.3 7.3 1.7 10.2L32 36.6l-9.4 4.7 1.7-10.2-7.3-7.3 10.2-1.6Z"
-        fill="#FFE45A"
-        stroke="#29183E"
-        strokeWidth="2.8"
-        strokeLinejoin="round"
-      />
-      {/* Jordanian red & black agal/shemagh crest */}
-      <path
-        d="M22.5 19.5c3-2.8 16-2.8 19 0"
-        fill="none"
-        stroke="#DC2626"
-        strokeWidth="3.6"
-        strokeLinecap="round"
-      />
-      <path
-        d="M23.5 17.6c2.7-2.2 14.3-2.2 17 0"
-        fill="none"
-        stroke="#29183E"
-        strokeWidth="2.8"
-        strokeLinecap="round"
-      />
-      {/* Glasses */}
-      <circle cx="26.8" cy="27.5" r="4.2" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
-      <circle cx="37.2" cy="27.5" r="4.2" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
-      <path d="M31 27.5h2" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
-      {/* Pupils */}
-      <circle cx={mood === 'thinking' ? '27.8' : '26.8'} cy="27.6" r="1.8" fill="#29183E" />
-      <circle cx={mood === 'thinking' ? '38.2' : '37.2'} cy="27.6" r="1.8" fill="#29183E" />
-      {/* Smile */}
-      {mood === 'tease' ? (
-        <path d="M28.5 34.5c2 1.2 5.2.8 7-1" fill="none" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
-      ) : (
-        <path d="M27.5 33.4c2.1 2.2 6.9 2.2 9 0" fill="none" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+
+      {/* Celebratory / Hyped Sparkles */}
+      {(m === 'celebrating' || m === 'hyped') && (
+        <g className="nashmi-svg__sparkles" fill="#FFE45A" stroke="#29183E" strokeWidth="1.5">
+          <path d="m13 13 1.5 3.1 3.3.5-2.4 2.3.6 3.3-3-1.6-3 1.6.6-3.3-2.4-2.3 3.3-.5Z" />
+          <path d="m51 12 1.2 2.5 2.7.4-1.9 1.9.4 2.7-2.4-1.3-2.4 1.3.4-2.7-1.9-1.9 2.7-.4Z" />
+        </g>
       )}
+
+      {/* Shocked / Tense Alert Bolt */}
+      {(m === 'tense' || m === 'shocked') && (
+        <g className="nashmi-svg__alert">
+          <path d="M51 9.5c2 2.2 2 5.4 0 7.6" fill="none" stroke="#FFE45A" strokeWidth="2.6" strokeLinecap="round" />
+          <circle cx="51" cy="20.5" r="1.5" fill="#FFE45A" />
+        </g>
+      )}
+
+      {/* Animated Head Group */}
+      <g className="nashmi-svg__head">
+        {/* Star head */}
+        <path
+          d="m32 13 4.8 9.2 10.2 1.6-7.3 7.3 1.7 10.2L32 36.6l-9.4 4.7 1.7-10.2-7.3-7.3 10.2-1.6Z"
+          fill="#FFE45A"
+          stroke="#29183E"
+          strokeWidth="2.8"
+          strokeLinejoin="round"
+        />
+
+        {/* Jordanian red & black agal/shemagh crest */}
+        <path
+          d="M22.5 19.5c3-2.8 16-2.8 19 0"
+          fill="none"
+          stroke="#DC2626"
+          strokeWidth="3.6"
+          strokeLinecap="round"
+        />
+        <path
+          d="M23.5 17.6c2.7-2.2 14.3-2.2 17 0"
+          fill="none"
+          stroke="#29183E"
+          strokeWidth="2.8"
+          strokeLinecap="round"
+        />
+
+        {/* Eyebrows for tense / shocked / teasing / thinking */}
+        {m === 'tense' || m === 'shocked' ? (
+          <g stroke="#29183E" strokeWidth="2" strokeLinecap="round">
+            <path d="M23 21.5c1.8-1.4 4.2-1.2 5.8 0" />
+            <path d="M35.2 21.5c1.6-1.2 4-1.4 5.8 0" />
+          </g>
+        ) : m === 'teasing' ? (
+          <g stroke="#29183E" strokeWidth="2" strokeLinecap="round">
+            <path d="M23.5 22.8h5.5" />
+            <path d="M34.8 21.2c2-1.2 4.2-.8 5.8.6" />
+          </g>
+        ) : m === 'thinking' ? (
+          <g stroke="#29183E" strokeWidth="1.9" strokeLinecap="round">
+            <path d="M23.5 22.4c1.6-.8 3.6-.8 5.2 0" />
+            <path d="M34.8 21.4c1.8-1 4-1 5.6 0" />
+          </g>
+        ) : null}
+
+        {/* Glasses & Eyes */}
+        <g className="nashmi-svg__glasses">
+          {m === 'celebrating' ? (
+            <>
+              <circle cx="26.5" cy="27.5" r="4.3" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+              <circle cx="37.5" cy="27.5" r="4.3" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+              <path d="M30.8 27.5h2.4" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+              {/* Happy ^^ eyes */}
+              <path d="M24.3 28.4c1.1-1.9 3.3-1.9 4.4 0" fill="none" stroke="#29183E" strokeWidth="2.2" strokeLinecap="round" />
+              <path d="M35.3 28.4c1.1-1.9 3.3-1.9 4.4 0" fill="none" stroke="#29183E" strokeWidth="2.2" strokeLinecap="round" />
+            </>
+          ) : m === 'teasing' ? (
+            <>
+              <circle cx="26.5" cy="27.5" r="4.2" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+              <circle cx="37.5" cy="27.5" r="4.2" fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+              <path d="M30.7 27.5h2.6" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+              {/* Left eye winks, right eye peeks sideways */}
+              <path d="M24.2 27.8c1.2-1.4 3.4-1.4 4.6 0" fill="none" stroke="#29183E" strokeWidth="2.2" strokeLinecap="round" />
+              <circle cx="38.3" cy="27.5" r="1.8" fill="#29183E" />
+            </>
+          ) : (
+            <>
+              <circle cx="26.5" cy="27.5" r={leftEyeR} fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+              <circle cx="37.5" cy="27.5" r={rightEyeR} fill="#FFF9ED" stroke="#29183E" strokeWidth="2.3" />
+              <path d="M30.8 27.5h2.4" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+              <g className="nashmi-svg__pupils">
+                <circle cx={m === 'thinking' ? '27.8' : '26.5'} cy={m === 'thinking' ? '26.8' : '27.6'} r={pupilR} fill="#29183E" />
+                <circle cx={m === 'thinking' ? '38.8' : '37.5'} cy={m === 'thinking' ? '26.8' : '27.6'} r={pupilR} fill="#29183E" />
+                <circle cx={m === 'thinking' ? '27.1' : '25.8'} cy="26.7" r=".7" fill="#FFF9ED" />
+                <circle cx={m === 'thinking' ? '38.1' : '36.8'} cy="26.7" r=".7" fill="#FFF9ED" />
+              </g>
+            </>
+          )}
+        </g>
+
+        {/* Rosy cheeks on hyped/celebrating */}
+        {(m === 'hyped' || m === 'celebrating') && (
+          <g fill="#FF68A0" opacity=".65">
+            <circle cx="21.5" cy="31.5" r="1.8" />
+            <circle cx="42.5" cy="31.5" r="1.8" />
+          </g>
+        )}
+
+        {/* Mouth expressions */}
+        {m === 'celebrating' || m === 'hyped' ? (
+          <path d="M27.2 32.8c2.2 3.2 7.4 3.2 9.6 0Z" fill="#29183E" stroke="#29183E" strokeWidth="1.5" strokeLinejoin="round" />
+        ) : m === 'shocked' ? (
+          <ellipse cx="32" cy="34.2" rx="2.5" ry="2.9" fill="#29183E" />
+        ) : m === 'tense' ? (
+          <path d="M28 34.4c1.3-1.2 2.7 1.2 4 0 1.3-1.2 2.7 1.2 4 0" fill="none" stroke="#29183E" strokeWidth="2.1" strokeLinecap="round" />
+        ) : m === 'teasing' ? (
+          <path d="M28.2 34.3c2.1 1.4 5.5.8 7.3-1.2" fill="none" stroke="#29183E" strokeWidth="2.2" strokeLinecap="round" />
+        ) : m === 'thinking' ? (
+          <path d="M29.2 34.2h5.4" fill="none" stroke="#29183E" strokeWidth="2.2" strokeLinecap="round" />
+        ) : (
+          <path d="M27.6 33.4c2.1 2.2 6.7 2.2 8.8 0" fill="none" stroke="#29183E" strokeWidth="2.3" strokeLinecap="round" />
+        )}
+      </g>
     </svg>
+  );
+}
+
+const HOST_MOOD_BADGES: Record<NashmiHostMood, string> = {
+  idle: 'نشمي مباشر',
+  hyped: 'حماس عالي!',
+  thinking: 'بيترقّب…',
+  tense: 'آخر 5 ثوانٍ!',
+  celebrating: 'احتفال!',
+  shocked: 'يا ساتر!',
+  teasing: 'ركّزوا!',
+};
+
+export function NashmiStageHost({
+  session,
+  onOpenBot,
+  placement = 'stage',
+}: {
+  session: GameSessionView;
+  onOpenBot?: () => void;
+  placement?: 'stage' | 'classic';
+}) {
+  const engineRef = useRef<HostReactionEngine | null>(null);
+  if (!engineRef.current) {
+    engineRef.current = new HostReactionEngine();
+  }
+
+  const [reaction, setReaction] = useState<HostReaction | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const lastSoundIdRef = useRef<string | null>(null);
+
+  const feedbackAt = session.lastFeedback?.atMs ?? 0;
+  const botChatId = session.botChat?.id ?? '';
+  const questionId = session.currentQuestion?.id ?? '';
+  const bidPhase = session.bidState?.phase ?? '';
+  const bidAmount = session.bidState?.currentBid ?? -1;
+
+  useEffect(() => {
+    const now = Date.now();
+    setNowMs(now);
+    const result = engineRef.current!.step(session, { nowMs: now });
+    if (result.emitted) {
+      setReaction(result.emitted);
+      if (lastSoundIdRef.current !== result.emitted.id) {
+        lastSoundIdRef.current = result.emitted.id;
+        // Avoid stepping on roundStart chord when entering round_intro
+        if (result.emitted.kind !== 'round_start') {
+          soundFx.hostCue(result.emitted.soundMood);
+        }
+      }
+    }
+  }, [
+    session.code,
+    session.phase,
+    session.currentRoundIndex,
+    questionId,
+    session.timerRemainingSec,
+    session.timerRunning,
+    session.answerRevealed,
+    session.buzzedTeamIndex,
+    feedbackAt,
+    botChatId,
+    bidPhase,
+    bidAmount,
+    session.teams,
+  ]);
+
+  useEffect(() => {
+    if (!reaction) return;
+    const timeout = setTimeout(() => {
+      setNowMs(Date.now());
+    }, 4600);
+    return () => clearTimeout(timeout);
+  }, [reaction?.id]);
+
+  const mood = resolveNashmiVisualMood(session, reaction, nowMs);
+  const bubbleFresh = Boolean(reaction && nowMs - reaction.atMs <= 7200);
+  const bubbleText =
+    mood === 'tense' && !bubbleFresh
+      ? `باقي ${session.timerRemainingSec} ثوانٍ بس! أسرعوا يا نشامى!`
+      : bubbleFresh && reaction
+      ? reaction.text
+      : session.settings.botOpponent?.enabled && session.botChat
+      ? session.botChat.text
+      : null;
+
+  const speakerLabel = session.settings.botOpponent?.enabled
+    ? session.settings.botOpponent.personaName || 'نشمي'
+    : 'نشمي · المذيع';
+
+  return (
+    <aside
+      className={`nashmi-stage-host nashmi-stage-host--${mood} nashmi-stage-host--${placement}`}
+      data-testid="nashmi-stage-host"
+      data-mood={mood}
+      aria-live="polite"
+    >
+      {bubbleText && (
+        <div
+          className="nashmi-stage-host__bubble"
+          data-testid="nashmi-stage-bubble"
+          key={reaction?.id ?? `${mood}-${bubbleText}`}
+        >
+          <span className="nashmi-stage-host__speaker">{speakerLabel}</span>
+          <p>{bubbleText}</p>
+        </div>
+      )}
+
+      {onOpenBot ? (
+        <button
+          type="button"
+          className="nashmi-stage-host__avatar"
+          onClick={onOpenBot}
+          aria-label="اسأل نشمي المذيع الأردني"
+        >
+          <NashmiMascot size={62} mood={mood} />
+          <span className="nashmi-stage-host__badge">{HOST_MOOD_BADGES[mood]}</span>
+        </button>
+      ) : (
+        <div className="nashmi-stage-host__avatar" aria-label={`نشمي المذيع — ${HOST_MOOD_BADGES[mood]}`}>
+          <NashmiMascot size={62} mood={mood} />
+          <span className="nashmi-stage-host__badge">{HOST_MOOD_BADGES[mood]}</span>
+        </div>
+      )}
+    </aside>
   );
 }
 
@@ -119,3 +377,4 @@ export function TrophyArt() {
     </g>
   </svg>;
 }
+

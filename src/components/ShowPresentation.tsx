@@ -18,21 +18,38 @@ export function useShowCountdown(endsAt?: number | null) {
 
 export function useShowSound(session: GameSessionView | null, countdown: number) {
   const last = useRef('');
+  const lastStartedRound = useRef<string | null>(null);
+
   useEffect(() => {
     if (!session) return;
     const round = session.rounds[session.currentRoundIndex];
+    soundFx.setRoundContext(round?.roundType, round?.goldenTargetType);
+
+    if (session.phase === 'round_intro' || session.phase === 'playing') {
+      const roundKey = `${session.code}-${session.currentRoundIndex}`;
+      if (lastStartedRound.current !== roundKey) {
+        lastStartedRound.current = roundKey;
+        soundFx.roundStart(round?.roundType, round?.goldenTargetType);
+      }
+    }
+
     const key = session.phase === 'countdown' ? `count-${session.currentRoundIndex}-${countdown}`
       : session.phase === 'finished' ? 'winner'
-      : session.phase === 'round_intro' && round?.roundType === 'golden' ? `gold-${session.currentRoundIndex}`
+      : session.phase === 'round_summary' ? `summary-${session.currentRoundIndex}`
       : session.timerRunning && session.timerRemainingSec <= 5 ? `tick-${session.currentQuestion?.id}-${session.timerRemainingSec}`
       : session.phase === 'playing' && session.timerRemainingSec === 0 ? `time-up-${session.currentRoundIndex}` : '';
     if (!key || last.current === key) return;
     last.current = key;
-    if (key === 'winner') soundFx.victory();
-    else if (key.startsWith('count-')) soundFx.countdown(countdown);
-    else if (key.startsWith('gold-')) soundFx.golden();
+    if (key === 'winner') {
+      const winner = determineWinner(session.teams);
+      soundFx.victory(winner.isTie);
+    } else if (key.startsWith('summary-')) {
+      if (session.teams.some((t) => t.points > 0)) {
+        soundFx.applause(0.85, 'light');
+      }
+    } else if (key.startsWith('count-')) soundFx.countdown(countdown, round?.roundType);
     else if (key.startsWith('time-up')) soundFx.timeUp();
-    else soundFx.tickUrgent();
+    else soundFx.tickUrgent(round?.roundType);
   }, [session, countdown]);
 }
 
