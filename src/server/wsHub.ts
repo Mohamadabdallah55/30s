@@ -1,3 +1,8 @@
+import type { EventV2, StateV2 } from '../shared/challengeV2';
+import { SECTIONS_V2 } from '../shared/challengeV2';
+import { applyEventV2, createStateV2, tickV2, viewStateV2 } from './challengeV2/engine';
+import { prepareMatchV2 } from './challengeV2/planner';
+import { persistSessionV2, refreshSessionV2 } from './challengeV2/sessionBridge';
 import crypto from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import type Database from 'better-sqlite3';
@@ -40,6 +45,7 @@ import { getBankAvailability, resetExposureCycleTx, selectNextQuestionTx } from 
 import { resolveUserFromToken } from './rbac';
 
 export interface InternalSessionState {
+  challengeV2?: StateV2;
   id: string;
   code: string;
   hostProfileId: string | null;
@@ -145,7 +151,7 @@ export class GameSessionHub {
       if (requestedRole === 'host') {
         const isAllowedHost =
           this.canGuestHost(session, req.headers.cookie) ||
-          (user && (user.role === 'admin' || user.role === 'teacher' || user.id === session.hostProfileId));
+          (user && (user.role === 'admin' || (user.role === 'teacher' && !session.challengeV2) || user.id === session.hostProfileId));
         role = isAllowedHost ? 'host' : 'audience';
       } else if (requestedRole === 'player') {
         role = 'player';
@@ -166,6 +172,13 @@ export class GameSessionHub {
       ws.on('message', (raw) => {
         try {
           const msg = JSON.parse(raw.toString()) as { type: string; payload?: Record<string, unknown> };
+          if (msg.type === 'v2:event') {
+            const team = msg.payload?.team;
+            if (role === 'host' || (role === 'player' && typeof team === 'number' && this.canTeamPlay(session, team, msg.payload?.teamKey)))
+              this.handleChallengeV2(code, msg.payload as unknown as EventV2, { host: role === 'host', team: typeof team === 'number' ? team : undefined });
+            return;
+          }
+          if (session.challengeV2 && msg.type !== 'ping') return;
           if (msg.type === 'ping') {
             ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
             return;
@@ -198,9 +211,9 @@ export class GameSessionHub {
     this.tickInterval = setInterval(() => {
       const now = Date.now();
       for (const [code, session] of this.sessionCache.entries()) {
-        if (!this.rooms.get(code)?.size && session.phase !== 'countdown' && !(session.phase === 'playing' && session.settings.botOpponent?.enabled)) continue;
+        if (!session.challengeV2 && !this.rooms.get(code)?.size && session.phase !== 'countdown' && !(session.phase === 'playing' && session.settings.botOpponent?.enabled)) continue;
         let changed = this.syncLiveTimer(session, now);
-        if (this.processBotTurn(session, now)) {
+        if (!session.challengeV2 && this.processBotTurn(session, now)) {
           changed = true;
         }
         if (changed) {
@@ -222,6 +235,11 @@ export class GameSessionHub {
   }
 
   private syncLiveTimer(session: InternalSessionState, now = Date.now()): boolean {
+    if (session.challengeV2) {
+      const changed = tickV2(session.challengeV2, now);
+      if(changed)refreshSessionV2(session);
+      return changed;
+    }
     let changed = false;
 
     if (session.phase === 'countdown' && session.countdownEndsAtMs && now >= session.countdownEndsAtMs) {
@@ -290,7 +308,9 @@ export class GameSessionHub {
       throw new Error('سجّل الدخول قبل إنشاء مباراة بتحكم الهاتف.');
     }
 
-    const skipVs = Boolean(params.skipVs && !params.settings?.hostControlled && !params.settings?.showMode);
+    const isV2 = params.settings?.engineMode === 'challenge_v2';
+    if (isV2 && ((params.teams.length && params.teams.length !== 2) || params.settings?.botOpponent?.enabled)) throw new Error('الوضع الرئيسي يتطلب فريقين بشريين.');
+    const skipVs = !isV2 && Boolean(params.skipVs && !params.settings?.hostControlled && !params.settings?.showMode);
     const code = this.generateUniqueCode();
     const id = `sess-${crypto.randomUUID().slice(0, 8)}`;
     const defaultTimer = params.settings?.defaultTimerSec ?? 30;
@@ -330,7 +350,7 @@ export class GameSessionHub {
       participantNames: t.participantNames ?? [],
     }));
 
-    if (params.settings?.showMode || bankRow.id.startsWith('bank-import-')) {
+    if (!isV2 && (params.settings?.showMode || bankRow.id.startsWith('bank-import-'))) {
       const participants = teams.flatMap((team) => team.participantIds);
       if (params.hostProfileId) participants.push(params.hostProfileId);
       const { byRoundType } = getBankAvailability(this.db, {
@@ -359,6 +379,7 @@ export class GameSessionHub {
       buzzerWrongRule: 'pass_to_other',
       adaptiveDifficulty: false,
       ...params.settings,
+      ...(isV2 ? { showMode:true, adaptiveDifficulty:false } : {}),
     };
 
     const session: InternalSessionState = {
@@ -366,7 +387,7 @@ export class GameSessionHub {
       code,
       hostProfileId: params.hostProfileId,
       guestHostKeyHash: params.guestHostKey ? this.hashHostKey(params.guestHostKey) : undefined,
-      teamKeySecret: params.settings?.showMode ? crypto.randomBytes(24).toString('hex') : undefined,
+      teamKeySecret: (params.settings?.showMode || isV2) ? crypto.randomBytes(24).toString('hex') : undefined,
       title: params.title.trim() || 'مسابقة تحدي الـ30 ثانية',
       bankId: bankRow.id,
       bankName: bankRow.name,
@@ -424,6 +445,18 @@ export class GameSessionHub {
       botPendingKey: null,
       updatedAt: new Date().toISOString(),
     };
+
+    if(isV2) {
+      const participantProfileIds = [...teams.flatMap(t=>t.participantIds), ...(params.hostProfileId ? [params.hostProfileId] : [])];
+      session.challengeV2=createStateV2(prepareMatchV2(this.db,{bankId:bankRow.id,ageGroup:params.ageGroup, difficulty:params.difficulty,
+        category:params.category,categories:params.categories,participantProfileIds},Boolean(settings.tacticalCards)),Boolean(settings.tacticalCards));
+      rounds.splice(0,rounds.length,...Object.entries(SECTIONS_V2).filter(([key])=>key!=='tiebreak').map(([key,meta],i)=>({
+        roundType: key==='auction'?'bid_challenge':key==='identity'?'who_am_i':'rapid_fire',
+        roundNumber:i+1,titleAr:meta.title,durationSec:30,basePoints:1,multiplier:1,questionsPerRound:1
+      } as RoundConfig)));
+      session.rounds=rounds;
+      refreshSessionV2(session);
+    }
 
     this.db.transaction(() => {
       this.db
@@ -488,6 +521,16 @@ export class GameSessionHub {
 
     this.sessionCache.set(code, session);
     return session;
+  }
+
+  handleChallengeV2(code: string, event: EventV2, actor: {host:boolean;team?:number}): GameSessionView {
+    const current=this.getSessionInternal(code);
+    if(!current?.challengeV2)throw new Error('المباراة لا تستخدم المحرك الجديد.');
+    if(this.syncLiveTimer(current))this.saveSession(current);
+    const next={...current, teams:structuredClone(current.teams), challengeV2:applyEventV2(current.challengeV2,event,actor)};
+    refreshSessionV2(next);
+    this.saveSession(next);this.broadcast(code);
+    return this.projectView(next,actor.host);
   }
 
   private hashHostKey(key: string): string {
@@ -584,10 +627,11 @@ export class GameSessionHub {
   }
 
   private projectView(s: InternalSessionState, includeHostSecret: boolean): GameSessionView {
+    if(s.challengeV2)refreshSessionV2(s);
     let qView: AudienceQuestionView | null = null;
     if (s.currentQuestion) {
       const q = s.currentQuestion;
-      const revealed = s.answerRevealed;
+      const revealed = s.answerRevealed && !s.challengeV2;
       qView = {
         id: q.id,
         bankId: q.bankId,
@@ -596,8 +640,8 @@ export class GameSessionHub {
         ageGroup: q.ageGroup,
         difficulty: q.difficulty,
         difficultyLevel: q.difficultyLevel,
-        prompt: q.prompt,
-        options: q.options,
+        prompt: s.challengeV2 && s.challengeV2.core.stage === 'ready' ? '' : q.prompt,
+        options: s.challengeV2 ? [] : q.options,
         cluesCount: q.clues.length,
         requiredCount: this.listTarget(q),
         revealedClues: q.clues.slice(0, Math.max(1, s.revealedClueCount)),
@@ -606,7 +650,7 @@ export class GameSessionHub {
         memoryItems: s.memoryPhase === 'memorize' || revealed ? q.memoryItems : [],
         memoryPhase: s.memoryPhase,
         memoryRemainingSec: s.memoryRemainingSec,
-        sourcePage: q.sourcePage,
+        sourcePage: s.challengeV2 ? undefined : q.sourcePage,
         isReligious: q.isReligious,
         ...(revealed
           ? {
@@ -621,6 +665,7 @@ export class GameSessionHub {
     }
 
     const view: GameSessionView = {
+      ...(s.challengeV2 ? {challengeV2: viewStateV2(s.challengeV2,includeHostSecret)} : {}),
       id: s.id,
       code: s.code,
       title: s.title,
@@ -687,6 +732,8 @@ export class GameSessionHub {
   }
 
   private saveSession(s: InternalSessionState) {
+    this.db.transaction(() => {
+    if(s.challengeV2)persistSessionV2(this.db,s);
     s.updatedAt = new Date().toISOString();
     this.sessionCache.set(s.code, s);
     this.db
@@ -699,6 +746,7 @@ export class GameSessionHub {
     for (const t of s.teams) {
       updateScore.run(t.points, t.strikes, t.streak, s.id, t.index);
     }
+    }).immediate();
   }
 
   broadcast(code: string) {
@@ -921,6 +969,7 @@ export class GameSessionHub {
 
   handleBuzz(code: string, teamIndex: number, questionId?: string): GameSessionView | null {
     const s = this.getSessionInternal(code);
+    if (s?.challengeV2) return null;
     if (!s || s.phase !== 'playing') return null;
     this.syncLiveTimer(s);
     if (s.answerRevealed || s.timerRemainingSec <= 0) return null;
@@ -1020,6 +1069,7 @@ export class GameSessionHub {
     isHost = false
   ): { ok: boolean; error?: string; view: GameSessionView } | null {
     const s = this.getSessionInternal(code);
+    if (s?.challengeV2) return null;
     if (!s || s.phase !== 'playing' || !s.bidState || (s.settings.hostControlled && !isHost)) return null;
     this.syncLiveTimer(s);
     const round = s.rounds[s.currentRoundIndex];
@@ -1152,6 +1202,7 @@ export class GameSessionHub {
     teamAuthorized = false
   ): { isCorrect: boolean; pointsDelta: number; view: GameSessionView } | null {
     const s = this.getSessionInternal(code);
+    if (s?.challengeV2) return null;
     if (!s || !s.currentQuestion || s.phase !== 'playing' || (s.settings.hostControlled && !(teamAuthorized && s.currentQuestion.roundType === 'multiple_choice'))) return null;
     this.syncLiveTimer(s);
     if (s.answerRevealed || s.timerRemainingSec <= 0 || s.memoryPhase === 'memorize' ||
@@ -1318,6 +1369,7 @@ export class GameSessionHub {
   ): GameSessionView | null {
     const s = this.getSessionInternal(code);
     if (!s) return null;
+    if (s.challengeV2) throw new Error('استخدم تحكم Challenge Engine V2 لهذه المباراة.');
     this.syncLiveTimer(s);
     const round = s.rounds[s.currentRoundIndex];
 

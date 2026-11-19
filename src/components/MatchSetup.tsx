@@ -1,3 +1,4 @@
+import { ChallengeV2Setup } from './ChallengeV2Setup';
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowRight, Check, Play, Settings2, Sparkles, Users } from 'lucide-react';
 import {
@@ -79,6 +80,7 @@ export function MatchSetup({
   onSessionCreated,
   onOpenAuth,
 }: MatchSetupProps) {
+  const [engineMode,setEngineMode]=useState<'challenge_v2'|'custom'>(!initialLessonId&&!initialRound&&(!initialOpponentMode||initialOpponentMode==='two_teams')?'challenge_v2':'custom');
   const [banks, setBanks] = useState<QuestionBank[]>([]);
   const [activePresetId, setActivePresetId] = useState<string>(initialLessonId ? 'lesson' : 'classic');
   const [bankId, setBankId] = useState(initialBankId ?? VARIETY_BANK_ID);
@@ -300,6 +302,7 @@ export function MatchSetup({
           roundTypes: selectedRounds,
           roundOverrides,
           settings: {
+            engineMode: initialLessonId?'educational':'custom',
             showMode: true,
             soundEnabled,
             reducedMotion,
@@ -329,6 +332,8 @@ export function MatchSetup({
       setCreating(false);
     }
   };
+
+  if(engineMode==='challenge_v2') return <ChallengeV2Setup banks={banks} user={user} soundEnabled={soundEnabled} reducedMotion={reducedMotion} onBack={onBack} onCustom={()=>setEngineMode('custom')} onLesson={onOpenLessonStudio} onOpenAuth={onOpenAuth} onSessionCreated={onSessionCreated}/>;
 
   return (
     <div className="show-setup min-h-screen text-slate-50 p-4 sm:p-8">

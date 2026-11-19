@@ -1,3 +1,5 @@
+import type { EventV2 } from '../shared/challengeV2';
+import { prepareMatchV2 } from './challengeV2/planner';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import express from 'express';
@@ -964,6 +966,36 @@ export function createAppAndHub(db: Database.Database) {
       hostControlled: hub.getSessionInternal(row.code)?.settings.hostControlled,
     }));
     res.json({ sessions });
+  });
+
+  app.post('/api/challenge-v2/preview', (req: AuthedRequest, res) => {
+    try {
+      const body=req.body;
+      if(!['easy','medium','hard','mixed'].includes(body.difficulty??'mixed'))throw new Error('صعوبة غير صالحة.');
+      const plan=prepareMatchV2(db,{bankId:String(body.bankId||'bank-import-thirty-seconds-v1'),
+        ageGroup:normalizeAgeGroup(body.ageGroup||'family'),difficulty:body.difficulty||'mixed',
+        category:typeof body.category==='string'?body.category:'الكل',
+        categories:Array.isArray(body.categories)?body.categories.filter((c: unknown)=>typeof c==='string').slice(0,40):[],
+        participantProfileIds:req.user?[req.user.id]:[]},Boolean(body.tacticalCards));
+      res.json({ready:true,mainQuestions:plan.filter(s=>s.section!=='tiebreak').length,
+        tieQuestions:plan.filter(s=>s.section==='tiebreak').length,
+        sections:[...new Set(plan.map(s=>s.section))].map(section=>({section,slots:plan.filter(s=>s.section===section).length}))});
+    } catch(error) {res.status(400).json({error:error instanceof Error?error.message:'تعذرت تهيئة المباراة'});}
+  });
+
+  app.post('/api/sessions/:code/v2/event', (req: AuthedRequest, res) => {
+    const s=hub.getSessionInternal(req.params.code);
+    if(!s?.challengeV2){res.status(404).json({error:'مباراة V2 غير موجودة'});return;}
+    const event=req.body as EventV2 & {teamKey?:unknown};
+    const host=event.teamKey === undefined && Boolean(hub.canGuestHost(s,req.headers.cookie)||(req.user&&(req.user.id===s.hostProfileId||req.user.role==='admin')));
+    if(!host&&(!Number.isInteger(event.team)||!hub.canTeamPlay(s,event.team!,event.teamKey))){
+      res.status(403).json({error:'استخدم رابط فريقك الخاص.'});return;
+    }
+    if(typeof event.id!=='string'||typeof event.action!=='string'||typeof event.turnId!=='string'||typeof event.questionInstanceId!=='string'){
+      res.status(400).json({error:'إجراء غير صالح.'});return;
+    }
+    try {res.json({session:hub.handleChallengeV2(req.params.code,event,{host,team:host?undefined:event.team})});}
+    catch(error){res.status(409).json({error:error instanceof Error?error.message:'تعذر تنفيذ الإجراء',session:hub.getSessionView(s.code,host)});}
   });
 
   app.post('/api/sessions', (req: AuthedRequest, res) => {

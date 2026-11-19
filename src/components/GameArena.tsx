@@ -1,3 +1,4 @@
+import { ChallengeV2Surface } from './ChallengeV2Surface';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
@@ -168,7 +169,7 @@ export function GameArena({
   }, [session.phase, session.teams, session.settings.showMode]);
 
   useEffect(() => {
-    if (session.settings.showMode) return;
+    if (session.settings.showMode || session.challengeV2) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const inInput =
@@ -328,6 +329,8 @@ export function GameArena({
   const useVerbalControls =
     isSprintRound && session.settings.verbalRapidFireDefault !== false && !showTypedSprint;
   const winSummary = determineWinner(session.teams);
+
+  if (session.challengeV2) return <ChallengeV2Surface session={session} role={session.hostSecret?'host':'audience'} onUpdate={setSession} onExit={onExit}/>;
 
   if (session.settings.showMode) {
     return <ShowArena session={session} audio={soundEnabled} connected={connected} canControl={Boolean(session.hostSecret)}

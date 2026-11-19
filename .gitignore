@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Runtime SQLite databases and sidecar files stay on the server only.
+data/*.db
+data/*.db-*
+data/*.sqlite*
+/node_modules
