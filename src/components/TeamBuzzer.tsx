@@ -1,3 +1,4 @@
+import { ChallengeV2Surface } from './ChallengeV2Surface';
 import React, { useEffect, useState } from 'react';
 import { Bell, CheckCircle2, Lock, Send, Trophy, Users, XCircle } from 'lucide-react';
 import { ROUND_RULES } from '../shared/gameRules';
@@ -104,6 +105,8 @@ export function TeamBuzzer({ code, initialTeamIndex = 0, onExit }: TeamBuzzerPro
       setSubmitting(false);
     }
   };
+
+  if (session?.challengeV2) return <ChallengeV2Surface session={session} role="team" teamIndex={initialTeamIndex} onUpdate={setSession} onExit={onExit}/>;
 
   if (!session) {
     return (

@@ -39,6 +39,7 @@ export interface SelectionResult {
 }
 
 interface QuestionRow {
+  answer_aliases_json?: string;
   id: string;
   bank_id: string;
   external_id: string | null;
@@ -91,6 +92,7 @@ export function rowToQuestionRecord(row: QuestionRow): QuestionRecord {
       ? cogRaw
       : undefined;
   return {
+    answerAliases: JSON.parse(row.answer_aliases_json || '{}'),
     id: row.id,
     bankId: row.bank_id,
     externalId: row.external_id,
@@ -502,4 +504,23 @@ export function resetExposureCycleTx(
     )
     .run(bankId, ...permanentIds);
   return info.changes;
+}
+
+/** V2 prepares a complete deck without exposing questions or using fallback round conversions. */
+export function getChallengeV2Candidates(db: Database.Database, req: Omit<SelectionRequest, 'roundType'>): QuestionRecord[] {
+  const rows = (db.prepare("SELECT * FROM questions WHERE bank_id = ? AND status = 'published'").all(req.bankId) as QuestionRow[])
+    .filter(row => isPlayable(row) && fitsAge(row, req.ageGroup));
+  const participants = req.participantProfileIds.filter(id => id && !id.startsWith('guest-'));
+  const exposed = new Set<string>();
+  if (participants.length) {
+    const marks = participants.map(() => '?').join(',');
+    const exposures = db.prepare(`SELECT DISTINCT question_id FROM question_exposures WHERE bank_id=? AND profile_id IN (${marks})`)
+      .all(req.bankId, ...participants) as Array<{question_id: string}>;
+    exposures.forEach(row => exposed.add(row.question_id));
+  }
+  const concepts = new Set(rows.filter(row => exposed.has(row.id)).map(row => row.concept_id).filter(Boolean));
+  const prompts = new Set(rows.filter(row => exposed.has(row.id)).map(row => normalizeArabicText(row.prompt)));
+  const categories = normalizeCategoryFilter(req.category, req.categories);
+  return rows.filter(row => !exposed.has(row.id) && (!row.concept_id || !concepts.has(row.concept_id)) &&
+    !prompts.has(normalizeArabicText(row.prompt)) && (!categories || categories.includes(row.category))).map(rowToQuestionRecord);
 }

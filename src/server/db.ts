@@ -414,6 +414,7 @@ export function createDatabase(dbPath?: string): Database.Database {
   ensureColumn('lesson_question_batches', 'rejected_details_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('questions', 'learning_objective', "TEXT DEFAULT ''");
   ensureColumn('questions', 'cognitive_level', "TEXT DEFAULT 'understand'");
+  ensureColumn('questions', 'answer_aliases_json', "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn('questions', 'answer_correctness_reason', "TEXT DEFAULT ''");
   ensureColumn('questions', 'grading_criterion', "TEXT DEFAULT ''");
   ensureColumn('questions', 'is_hypothetical_scenario', 'INTEGER NOT NULL DEFAULT 0');

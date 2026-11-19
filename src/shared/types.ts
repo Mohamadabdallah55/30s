@@ -1,3 +1,4 @@
+import type { ViewV2 } from './challengeV2';
 export type UserRole = 'admin' | 'teacher' | 'player' | 'guest';
 
 export type CanonicalAgeGroup =
@@ -212,6 +213,7 @@ export interface RejectedQuestionLog {
 }
 
 export interface QuestionRecord {
+  answerAliases?: Record<string, string[]>;
   id: string;
   bankId: string;
   externalId?: string | null;
@@ -323,6 +325,8 @@ export interface BotChatBubble {
 }
 
 export interface SessionSettings {
+  engineMode?: 'challenge_v2' | 'custom' | 'educational';
+  tacticalCards?: boolean;
   hostControlled?: boolean;
   showMode?: boolean;
   soundEnabled: boolean;
@@ -379,6 +383,7 @@ export type SessionPhase =
   | 'finished';
 
 export interface GameSessionView {
+  challengeV2?: ViewV2;
   id: string;
   code: string;
   title: string;

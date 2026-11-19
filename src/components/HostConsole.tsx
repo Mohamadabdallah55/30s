@@ -1,3 +1,4 @@
+import { ChallengeV2Surface } from './ChallengeV2Surface';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
@@ -86,7 +87,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)) return;
-      if (!session || session.phase === 'finished' || e.repeat) return;
+      if (!session || session.challengeV2 || session.phase === 'finished' || e.repeat) return;
       if (e.code === 'Space') {
         e.preventDefault();
         if (session.phase === 'vs') {
@@ -126,6 +127,8 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  if (session?.challengeV2) return <ChallengeV2Surface session={session} role={session.hostSecret?'host':'audience'} onUpdate={setSession} onExit={onBack}/>;
 
   if (error && !session) {
     return (

@@ -1,3 +1,4 @@
+import { ChallengeV2Surface } from './ChallengeV2Surface';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Volume2, VolumeX } from 'lucide-react';
 import type { GameSessionView } from '../shared/types';
@@ -49,6 +50,8 @@ export function AudienceProjector({ code, onExit }: { code: string; onExit: () =
     else if (last.type === 'lead_change') soundFx.lead();
     else if (last.type === 'correct' || last.type === 'golden') soundFx.correct(rt);
   }, [session]);
+
+  if (session?.challengeV2) return <ChallengeV2Surface session={session} role="audience" onExit={onExit}/>;
 
   if (!session) return <div className="show-stage show-stage--loading"><ShowMark /><p role="status">{error || 'لحظة… عم نربط شاشة الجمهور.'}</p>{error && <button className="show-button show-button--cream" onClick={onExit}>الرجوع</button>}</div>;
   const playing = session.phase === 'playing' || session.phase === 'paused';
