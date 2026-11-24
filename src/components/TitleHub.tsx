@@ -87,6 +87,7 @@ export function TitleHub({
       <header className="show-nav show-wrap">
         <ShowMark />
         <div className="show-nav__tools">
+          <a href="https://say-it-u1w6.onrender.com/" className="show-account" aria-label="العودة إلى منصة يمكن هاي" style={{textDecoration:'none',background:'#ffdf55',color:'#25152d',whiteSpace:'nowrap'}}><ArrowLeft size={16}/> <span>كل الألعاب</span></a>
           <button type="button" className="show-nashmi-btn" aria-label="اسأل نشمي — البوت الأردني" onClick={onOpenBot}>
             <NashmiMascot size={26} />
             <span className="hidden sm:inline">اسأل نشمي</span>
