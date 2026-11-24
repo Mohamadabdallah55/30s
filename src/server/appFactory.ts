@@ -1336,7 +1336,8 @@ export function createAppAndHub(db: Database.Database) {
       res.status(401).json({ error: 'Unauthorized.' }); return;
     }
     const body = req.body as { game?: unknown; kind?: unknown; message?: unknown; systemInstruction?: unknown } | undefined;
-    if (!body || body.game !== 'yemken_hay' || (body.kind !== 'chat' && body.kind !== 'judge') ||
+    if (!body || (body.game !== 'yemken_hay' && body.game !== 'codenames') ||
+        (body.game === 'codenames' && body.kind !== 'chat') || (body.kind !== 'chat' && body.kind !== 'judge') ||
         typeof body.message !== 'string' || !body.message.trim() || body.message.length > 16000 ||
         typeof body.systemInstruction !== 'string' || !body.systemInstruction.trim() || body.systemInstruction.length > 16000) {
       res.status(400).json({ error: 'Invalid assistant request.' }); return;
