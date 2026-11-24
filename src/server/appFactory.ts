@@ -38,6 +38,7 @@ import {
   type BotChatMessage,
   callJordanianBotGemini,
   getLocalJordanianGuideReply,
+  generateNashmiContent,
 } from './botService';
 import { difficultyToLevel, normalizeAgeGroup } from '../shared/gameRules';
 import { JORDANIAN_BOT_DEFAULT_NAME } from '../shared/jordanianBot';
@@ -1314,6 +1315,52 @@ export function createAppAndHub(db: Database.Database) {
         error: 'تعذّر الاتصال بمحرك الذكاء الاصطناعي حالياً.',
         code: 'UPSTREAM_ERROR',
       });
+    }
+  });
+
+
+  // Private server-to-server bridge for other first-party games. Never use a
+  // browser API key, room token, or a public CORS endpoint for this bridge.
+  let platformBotInFlight = 0;
+  let platformBotWindow = 0;
+  let platformBotRequests = 0;
+  app.post('/api/bot/platform', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const secret = process.env.NASHMI_SHARED_SECRET || '';
+    if (Buffer.byteLength(secret) < 32) {
+      res.status(503).json({ error: 'Shared assistant is not configured.' }); return;
+    }
+    const provided = Buffer.from(req.get('X-Nashmi-Secret') || '');
+    const expected = Buffer.from(secret);
+    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+      res.status(401).json({ error: 'Unauthorized.' }); return;
+    }
+    const body = req.body as { game?: unknown; kind?: unknown; message?: unknown; systemInstruction?: unknown } | undefined;
+    if (!body || body.game !== 'yemken_hay' || (body.kind !== 'chat' && body.kind !== 'judge') ||
+        typeof body.message !== 'string' || !body.message.trim() || body.message.length > 16000 ||
+        typeof body.systemInstruction !== 'string' || !body.systemInstruction.trim() || body.systemInstruction.length > 16000) {
+      res.status(400).json({ error: 'Invalid assistant request.' }); return;
+    }
+    const now = Date.now();
+    if (now - platformBotWindow >= 60000) { platformBotWindow = now; platformBotRequests = 0; }
+    if (platformBotInFlight >= 2 || platformBotRequests >= 24) {
+      res.status(429).json({ error: 'Assistant busy.' }); return;
+    }
+    platformBotRequests++;
+    platformBotInFlight++;
+    try {
+      const reply = await generateNashmiContent({
+        contents: [{ role: 'user', parts: [{ text: body.message }] }],
+        systemInstruction: body.systemInstruction,
+        json: body.kind === 'judge',
+        timeoutMs: body.kind === 'judge' ? 6500 : 10000,
+      });
+      res.json({ reply });
+    } catch (err) {
+      const status = err instanceof BotGeminiError ? err.status : 502;
+      res.status(status).json({ error: 'Shared assistant temporarily unavailable.' });
+    } finally {
+      platformBotInFlight--;
     }
   });
 

@@ -68,26 +68,8 @@ export async function callJordanianBotGemini(
     sessionCode?: string;
   }
 ): Promise<{ reply: string; model: string }> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    throw new BotGeminiError(
-      'مفتاح خدمة الذكاء الاصطناعي (GEMINI_API_KEY) مش مضاف على الخادم. تقدر تستخدم «مرشد نشمي الفوري» مجاناً أو تضيف المفتاح من Settings > Secrets.',
-      503,
-      'GEMINI_KEY_MISSING'
-    );
-  }
-
   const context = buildAdvisorContextFromDb(db, hub, params.screen, params.sessionCode);
   const systemInstruction = buildJordanianBotSystemPrompt(context);
-
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
 
   const safeHistory = (params.history ?? []).slice(-8).map((item) => ({
     role: item.role === 'model' ? ('model' as const) : ('user' as const),
@@ -103,15 +85,7 @@ export async function callJordanianBotGemini(
   ];
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents,
-      config: {
-        systemInstruction,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
-    });
-    const rawText = (response.text ?? '').trim();
+    const rawText = await generateNashmiContent({ contents, systemInstruction });
     const text = rawText
       .replace(/\*\*(.*?)\*\*/g, '$1')
       .replace(/^#{1,6}\s+/gm, '')
@@ -139,4 +113,38 @@ export async function callJordanianBotGemini(
     }
     throw new BotGeminiError('تعذّر الاتصال بمحرك الذكاء الاصطناعي حالياً. استخدم المرشد الفوري أو حاول بعد لحظة.', 502, 'UPSTREAM_ERROR');
   }
+}
+
+// Both games use the same server-owned Gemini engine. No API key is sent to a browser.
+const NASHMI_MODEL = 'gemini-4-hydrogen';
+
+export async function generateNashmiContent(params: {
+  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+  systemInstruction: string;
+  json?: boolean;
+  timeoutMs?: number;
+}): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    throw new BotGeminiError('مفتاح خدمة الذكاء الاصطناعي غير مضاف على الخادم.', 503, 'GEMINI_KEY_MISSING');
+  }
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: { 'User-Agent': 'aistudio-build' },
+      ...(params.timeoutMs ? { timeout: params.timeoutMs } : {}),
+    },
+  });
+  const response = await ai.models.generateContent({
+    model: NASHMI_MODEL,
+    contents: params.contents,
+    config: {
+      systemInstruction: params.systemInstruction,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      ...(params.json ? { responseMimeType: 'application/json' } : {}),
+    },
+  });
+  const reply = (response.text ?? '').trim();
+  if (!reply) throw new BotGeminiError('ما رجع رد واضح من النموذج.', 502, 'EMPTY_RESPONSE');
+  return reply;
 }
