@@ -6,9 +6,9 @@ import { apiFetch, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
 import { NashmiStageHost, ShowMark } from './ShowArt';
 import { ChallengeDisplay, ScoreRibbon, ShowIntermission, useShowCountdown, useShowSound } from './ShowPresentation';
-import { SessionQrBadge } from './BrandEmblem';
+import { AudienceControlQr } from './AudienceControlQr';
 
-export function AudienceProjector({ code, onExit }: { code: string; onExit: () => void }) {
+export function AudienceProjector({ code, onExit, onOpenHost }: { code: string; onExit: () => void; onOpenHost?: () => void }) {
   const [session, setSession] = useState<GameSessionView | null>(null);
   const [error, setError] = useState('');
   const [soundAllowed, setSoundAllowed] = useState(false);
@@ -51,13 +51,13 @@ export function AudienceProjector({ code, onExit }: { code: string; onExit: () =
     else if (last.type === 'correct' || last.type === 'golden') soundFx.correct(rt);
   }, [session]);
 
-  if (session?.challengeV2) return <ChallengeV2Surface session={session} role="audience" onExit={onExit}/>;
+  if (session?.challengeV2) return <ChallengeV2Surface session={session} role="audience" onExit={onExit} onOpenHost={onOpenHost}/>;
 
   if (!session) return <div className="show-stage show-stage--loading"><ShowMark /><p role="status">{error || 'لحظة… عم نربط شاشة الجمهور.'}</p>{error && <button className="show-button show-button--cream" onClick={onExit}>الرجوع</button>}</div>;
   const playing = session.phase === 'playing' || session.phase === 'paused';
   const vs = session.phase === 'vs' || session.phase === 'lobby';
   return (
-    <div className={`show-stage ${session.settings.reducedMotion ? 'reduce-motion' : ''}`} dir="rtl" data-phase={session.phase}>
+    <div className={`show-stage audience-wide-stage ${session.settings.reducedMotion ? 'reduce-motion' : ''}`} dir="rtl" data-phase={session.phase}>
       <header className="show-stage__head">
         <ShowMark />
         <span>{reconnecting ? 'جارٍ إعادة الاتصال…' : 'شاشة الجمهور'} <bdi>#{code}</bdi></span>
@@ -67,15 +67,16 @@ export function AudienceProjector({ code, onExit }: { code: string; onExit: () =
         }}>{soundAllowed ? <Volume2 /> : <VolumeX />}</button>}
         {vs && <button className="show-stage__sound" type="button" aria-label="الرجوع" onClick={onExit}><ArrowRight /></button>}
       </header>
-      <main className="show-stage__main">
-        {!vs && <ScoreRibbon session={session} />}
-        {playing ? <ChallengeDisplay session={session} /> : <ShowIntermission session={session} countdown={countdown} />}
-        {vs && <div className="show-stage__pair">
-          <SessionQrBadge code={code} url={`${location.origin}/?mode=host&code=${encodeURIComponent(code)}`} size="sm" />
-          <span>امسح الرمز بهاتف المشرف</span>
-        </div>}
+      <main className="audience-wide-grid">
+        <aside className="audience-wide-rail">
+          {!vs && <ScoreRibbon session={session}/>}
+          <AudienceControlQr code={code} onOpenHost={onOpenHost}/>
+        </aside>
+        <div className="audience-wide-content">
+          {playing ? <ChallengeDisplay session={session} /> : <ShowIntermission session={session} countdown={countdown} />}
+        </div>
       </main>
-      <NashmiStageHost session={session} />
+      {/* The audience question owns the full main area; no floating mascot here. */}
     </div>
   );
 }
