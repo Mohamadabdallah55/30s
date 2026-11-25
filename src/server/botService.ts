@@ -1,4 +1,5 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { paidMode, runPaidAI, PAID_MODEL } from './paidAi';
 import type Database from 'better-sqlite3';
 import {
   answerGameQuestionLocally,
@@ -93,7 +94,7 @@ export async function callJordanianBotGemini(
     if (!text) {
       throw new BotGeminiError('ما رجع رد واضح من نموذج الذكاء الاصطناعي. جرّب تسأل مرة ثانية.', 502, 'EMPTY_RESPONSE');
     }
-    return { reply: text, model: 'gemini-4-hydrogen' };
+    return { reply: text, model: paidMode() ? PAID_MODEL : 'gemini-4-hydrogen' };
   } catch (err) {
     if (err instanceof BotGeminiError) throw err;
     const raw = err instanceof Error ? err.message : String(err);
@@ -124,6 +125,10 @@ export async function generateNashmiContent(params: {
   json?: boolean;
   timeoutMs?: number;
 }): Promise<string> {
+  if (paidMode()) {
+    const result = await runPaidAI({kind:'chat',input:params.contents.slice(-4).map(m=>({role:m.role==='model'?'assistant':'user',content:m.parts.map(p=>({type:'input_text',text:p.text}))})),instructions:params.systemInstruction,json:params.json,timeoutMs:params.timeoutMs});
+    return result.text;
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     throw new BotGeminiError('مفتاح خدمة الذكاء الاصطناعي غير مضاف على الخادم.', 503, 'GEMINI_KEY_MISSING');

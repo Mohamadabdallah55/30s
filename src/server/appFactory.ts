@@ -3,6 +3,7 @@ import { prepareMatchV2 } from './challengeV2/planner';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import express from 'express';
+import { paidMode, paidConfigured, runPaidAI } from './paidAi';
 import fs from 'node:fs';
 import multer from 'multer';
 import type Database from 'better-sqlite3';
@@ -1365,5 +1366,20 @@ export function createAppAndHub(db: Database.Database) {
     }
   });
 
+  // Authenticated, server-only PDF bridge. All games share the same durable budget.
+  app.post('/api/bot/platform-pdf', async (req,res)=>{
+    res.set('Cache-Control','no-store');
+    const secret=process.env.NASHMI_SHARED_SECRET||'';
+    const supplied=Buffer.from(req.get('X-Nashmi-Secret')||'');
+    const expected=Buffer.from(secret);
+    if(expected.length<32 || supplied.length!==expected.length || !crypto.timingSafeEqual(supplied,expected)) return res.status(401).json({error:'Unauthorized'});
+    if(!paidMode()||!paidConfigured('pdf')) return res.status(503).json({error:'Paid PDF AI unavailable'});
+    try {
+      const body=req.body;
+      if(!body||body.game!=='yemken_hay'||typeof body.instructions!=='string') return res.status(400).json({error:'Invalid request'});
+      const result=await runPaidAI({kind:'pdf',input:body.input,instructions:body.instructions,json:body.json===true,maxOutputTokens:typeof body.maxOutputTokens==='number'?body.maxOutputTokens:4000,timeoutMs:110000});
+      res.json(result);
+    } catch {res.status(503).json({error:'PDF AI unavailable or budget exhausted'});}
+  });
   return { app, hub };
 }

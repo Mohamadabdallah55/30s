@@ -1,4 +1,5 @@
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { paidMode, paidConfigured, runPaidAI, type Part } from './paidAi';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -442,6 +443,16 @@ function parseRetryDelaySec(msg: string): number | undefined {
 }
 
 export function createDefaultGeminiRunner(): GeminiRunner {
+  if(paidMode()) {
+    if(!paidConfigured('pdf')) throw new Error('Paid PDF AI not enabled');
+    return { async generateStructuredJson(p) {
+      const parts:Part[]=[];
+      if(p.pdfBase64) parts.push({type:'input_file',filename:'lesson.pdf',file_data:'data:application/pdf;base64,'+p.pdfBase64,detail:'low'});
+      if(p.pageSliceText) parts.push({type:'input_text',text:p.pageSliceText});
+      parts.push({type:'input_text',text:p.prompt});
+      return runPaidAI({kind:'pdf',input:[{role:'user',content:parts}],instructions:p.systemInstruction+' Return JSON matching this schema: '+JSON.stringify(p.responseSchema),json:true,maxOutputTokens:p.maxOutputTokens,timeoutMs:p.timeoutMs});
+    }};
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     throw new Error('مفتاح خدمة الذكاء الاصطناعي غير مهيأ على الخادم (GEMINI_API_KEY).');
