@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: 30s-static-preview
+    runtime: static
+    repo: https://github.com/Mohamadabdallah55/30s
+    branch: main
+    buildCommand: bun install --frozen-lockfile && bunx vite build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://three0s-guai.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
+  - type: web
+    name: say-it-static-preview
+    runtime: static
+    repo: https://github.com/Mohamadabdallah55/say-it
+    branch: main
+    buildCommand: bun install --frozen-lockfile && bunx vite build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://say-it-u1w6.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
+  - type: web
+    name: without-us-static-preview
+    runtime: static
+    repo: https://github.com/Mohamadabdallah55/without-us
+    branch: main
+    buildCommand: bun install --frozen-lockfile && bunx vite build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://without-us.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
