@@ -3,8 +3,8 @@ import type { QuestionRecord } from './types';
 export type SectionV2 = 'knowledge' | 'auction' | 'buzzer' | 'identity' | 'impossible' | 'comeback' | 'tiebreak';
 export type StageV2 = 'ready' | 'reading' | 'bidding' | 'auction_ready' | 'answering' | 'buzz_open' | 'judging' | 'result' | 'finished' | 'cancelled';
 export const SECTIONS_V2: Record<SectionV2, { title: string; rules: string }> = {
-  knowledge: { title: 'ماذا تعرف؟', rules: 'سؤال مشترك؛ 7 ثوانٍ لكل دور، وباس واحد لكل فريق في السؤال دون خطأ. ثلاثة أخطاء على الفريق تخسره نقطة.' },
-  auction: { title: 'المزاد', rules: 'مزايدة دون عد تنازلي. يبدأ عدّ 30 ثانية للتنفيذ فقط بعد تأكيد الجاهزية. النجاح 3 نقاط، والفشل نقطتان للخصم.' },
+  knowledge: { title: 'ماذا تعرف؟', rules: 'سؤال مشترك؛ 7 ثوانٍ لكل دور، وباس واحد لكل فريق في السؤال دون خطأ. عند الخطأ الثالث يحصل الخصم فورًا على نقطة وتنتهي المواجهة.' },
+  auction: { title: 'المزاد', rules: 'مزايدة دون عد تنازلي. يبدأ عدّ 30 ثانية للتنفيذ فقط بعد تأكيد الجاهزية. النجاح 3 نقاط؛ أول إجابة خاطئة أو عدم تحقيق العدد عند انتهاء الوقت يعطي الخصم نقطة واحدة.' },
   buzzer: { title: 'الجرس', rules: '6 أسئلة. افتح الجرس بعد القراءة. الصحيح نقطتان؛ فرصة الخصم مقابل نقطة.' },
   identity: { title: 'من أنا؟', rules: 'سؤالان مشتركان. 3 ثم 2 ثم نقطة. محاولة واحدة لكل فريق في مستوى التلميح.' },
   impossible: { title: 'المستحيل', rules: 'سؤالان موثقان من المستوى الخامس، دون اختيارات. 4 نقاط للإجابة الصحيحة.' },
