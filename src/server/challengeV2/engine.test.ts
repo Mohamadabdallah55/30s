@@ -44,7 +44,7 @@ test('six sections: independent 30-second turns, auction success/failure, steal,
   h.answer(h.state.core.bidder,true,'أحمد');h.answer(h.state.core.bidder,true,'محمد');h.answer(h.state.core.bidder,true,'علي');
   h.advanceTime(30000);h.act('advance');
   h.act('begin');const losingBidder=h.state.core.bidder;h.act('challenge',{team:h.state.core.bidTurn});h.act('start_auction');assert.equal(h.state.core.team,losingBidder);
-  h.advanceTime(30000);assert.equal(h.state.core.ledger.at(-1)?.points,2);h.act('advance');
+  h.advanceTime(30000);assert.equal(h.state.core.ledger.at(-1)?.points,1);h.act('advance');
   for(let i=0;i<6;i++){
     h.act('open_buzzer');h.act('buzz',{team:0});
     h.answer(0,false);assert.equal(h.state.core.team,1);assert.equal(h.state.core.deadline,null);
@@ -121,7 +121,7 @@ test('spoken judging is host-only, atomic, idempotent and undoable in one step',
   h.act('undo');assert.equal(h.state.core.attempts.length,0);assert.deepEqual(h.state.core.scores,[0,0]);
 });
 
-test('shared knowledge alternates, rejects duplicate answers, and deducts a point after three mistakes',()=>{
+test('shared knowledge alternates, rejects duplicate answers, and awards the opponent a point after three mistakes',()=>{
   const h=harness([slot('knowledge',0,null)]);
   h.act('start');h.act('begin');assert.equal(h.state.core.team,0);
   h.act('judge_spoken',{team:0,text:'أحمد',correct:true});
@@ -133,7 +133,7 @@ test('shared knowledge alternates, rejects duplicate answers, and deducts a poin
   h.advanceTime(7000);assert.equal(h.state.core.team,0);
   h.act('judge_spoken',{team:0,text:'خطأ',correct:false});
   h.act('judge_spoken',{team:1,text:'خطأ',correct:false});
-  assert.equal(h.state.core.stage,'result');assert.deepEqual(h.state.core.scores,[0,-1]);
+  assert.equal(h.state.core.stage,'result');assert.deepEqual(h.state.core.scores,[1,0]);
 });
 
 test('original timing: reading and bidding wait indefinitely; auction clock starts only on ready',()=>{
@@ -168,4 +168,22 @@ test('buzzer, impossible, comeback and clues have no automatic countdown',()=>{
     assert.equal(h.state.core.deadline,null);assert.equal(h.advanceTime(60000),false);
     h.answer(0);assert.equal(h.state.core.stage,'result');
   }
+});
+
+test('auction wrong answer closes immediately, awards exactly one opponent point, and is undoable',()=>{
+  const h=harness([slot('auction',0)]);h.act('start');h.act('begin');
+  h.act('challenge',{team:h.state.core.bidTurn});h.act('start_auction');
+  const bidder=h.state.core.bidder;
+  h.act('judge_spoken',{team:bidder,text:'أحمد',correct:true});
+  const event=h.event('judge_spoken',{team:bidder,text:'خطأ',correct:false});
+  h.run(event);
+  assert.equal(h.state.core.stage,'result');
+  assert.equal(h.state.core.deadline,null);
+  assert.equal(h.state.core.scores[bidder],0);
+  assert.equal(h.state.core.scores[1-bidder],1);
+  assert.equal(h.state.core.ledger.length,1);
+  h.run(event);assert.equal(h.advanceTime(30000),false);
+  assert.equal(h.state.core.scores[1-bidder],1);
+  h.act('undo');assert.deepEqual(h.state.core.scores,[0,0]);
+  assert.equal(h.state.core.stage,'answering');
 });
