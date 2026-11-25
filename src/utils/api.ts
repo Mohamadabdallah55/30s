@@ -60,7 +60,7 @@ export function useSessionSocket(
       if (closedByUser) return;
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const token = getAuthToken() || '';
-      const url = `${proto}//${window.location.host}/ws?code=${encodeURIComponent(code)}&role=${role}${role === 'host' && token ? '&token=' + encodeURIComponent(token) : ''}`;
+      const url = `${proto}//${window.location.hostname === "three0s-static-preview-qnd0.onrender.com" ? "three0s-guai.onrender.com" : window.location.host}/ws?code=${encodeURIComponent(code)}&role=${role}${role === 'host' && token ? '&token=' + encodeURIComponent(token) : ''}`;
       ws = new WebSocket(url);
 
       ws.onopen = () => {
