@@ -120,3 +120,18 @@ test('spoken judging is host-only, atomic, idempotent and undoable in one step',
   h.run(e);assert.equal(h.state.revision,before+1);
   h.act('undo');assert.equal(h.state.core.attempts.length,0);assert.deepEqual(h.state.core.scores,[0,0]);
 });
+
+test('shared knowledge alternates, rejects duplicate answers, and deducts a point after three mistakes',()=>{
+  const h=harness([slot('knowledge',0,null)]);
+  h.act('start');h.act('begin');assert.equal(h.state.core.team,0);
+  h.act('judge_spoken',{team:0,text:'أحمد',correct:true});
+  assert.equal(h.state.core.team,1);
+  assert.throws(()=>h.act('judge_spoken',{team:1,text:'أحمد',correct:true}),/محسوب/);
+  h.act('judge_spoken',{team:1,text:'خطأ',correct:false});
+  assert.equal(h.state.core.team,0);
+  h.act('judge_spoken',{team:0,text:'محمد',correct:true});
+  h.advanceTime(10000);assert.equal(h.state.core.team,0);
+  h.act('judge_spoken',{team:0,text:'خطأ',correct:false});
+  h.act('judge_spoken',{team:1,text:'خطأ',correct:false});
+  assert.equal(h.state.core.stage,'result');assert.deepEqual(h.state.core.scores,[0,-1]);
+});
