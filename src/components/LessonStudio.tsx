@@ -205,7 +205,7 @@ export function LessonStudio({
   const [excludedMatchRounds, setExcludedMatchRounds] = useState<RoundType[]>([]);
   const [preparedSession, setPreparedSession] = useState<GameSessionView | null>(null);
   const [preparingQr, setPreparingQr] = useState(false);
-  const [autoOpenProjectorOnStart, setAutoOpenProjectorOnStart] = useState(true);
+  const [autoOpenProjectorOnStart, setAutoOpenProjectorOnStart] = useState(false);
   const [copiedLinkKey, setCopiedLinkKey] = useState<string | null>(null);
   const [qrViewTab, setQrViewTab] = useState<'host' | 'buzzers'>('host');
   const [autoStartSec, setAutoStartSec] = useState<number | null>(null);
@@ -848,6 +848,7 @@ export function LessonStudio({
           { name: team2Name.trim() || 'فريق الرواد', color: '#F59E0B' },
         ],
         settings: {
+          engineMode: 'educational',
           hostControlled: true,
           showMode: true,
           defaultTimerSec: matchTimerSec,
@@ -1615,7 +1616,7 @@ export function LessonStudio({
                   <div>
                     <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
                       <MonitorPlay className="w-5 h-5 text-emerald-400" />
-                      <span>اعتماد الأسئلة وإطلاق مسابقة الدرس + تحكم الهاتف بـ QR</span>
+                      <span>اعتماد الأسئلة وبدء المباراة من نفس الشاشة</span>
                     </h3>
                     <p className="text-xs text-slate-400">
                       معتمد للعب: <strong className="text-emerald-300 tabular-nums">{publishedCount}</strong> · يحتاج مراجعة:{' '}
@@ -1658,7 +1659,7 @@ export function LessonStudio({
                         className="rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black px-4 py-2 text-xs transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <Play className="w-3.5 h-3.5" />
-                        <span>تشغيل المباراة بالأسئلة المعتمدة ({publishedCount})</span>
+                        <span>ابدأ اللعب الآن ({publishedCount} سؤالًا)</span>
                       </button>
                     )}
                   </div>
@@ -1741,7 +1742,7 @@ export function LessonStudio({
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-xs font-bold text-sky-300 flex items-center gap-1.5">
                           <Smartphone className="w-4 h-4" />
-                          <span>تجهيز باركود تحكم الأستاذ من الهاتف</span>
+                          <span>ربط أجهزة إضافية (اختياري)</span>
                         </div>
                         <button
                           type="button"
@@ -1807,7 +1808,7 @@ export function LessonStudio({
                                         onClick={() => onOpenHostPanel(preparedSession)}
                                         className="w-full rounded-lg bg-emerald-500/20 border border-emerald-400/35 px-2.5 py-1.5 text-emerald-200 font-bold"
                                       >
-                                        فتح شاشة المشرف الآن
+                                        فتح شاشة المباراة
                                       </button>
                                     )}
                                     <label className="flex items-center gap-1.5 text-slate-400 cursor-pointer">

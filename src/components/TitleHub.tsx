@@ -110,8 +110,8 @@ export function TitleHub({
             </h1>
             <p className="show-hero__tag">يا بتبدع… يا بتتلبّك!</p>
             <div className="show-hero__actions">
-              <button type="button" className="show-button show-button--yellow" onClick={() => onStartSetup()}><Play fill="currentColor" size={21} /> يلا نبلّش!</button>
-              <button type="button" className="show-button show-button--cream" disabled={busy || botBusy} onClick={quickPlay}><Zap size={20} />{busy ? 'لحظة…' : 'تحدي سريع'}</button>
+              <button type="button" className="show-button show-button--yellow" onClick={() => onStartSetup()}><Play fill="currentColor" size={21} /> ابدأ المباراة الرسمية</button>
+              <button type="button" className="show-button show-button--cream" disabled={busy || botBusy} onClick={quickPlay}><Zap size={20} />{busy ? 'لحظة…' : 'تدريب سريع'}</button>
               <button type="button" className="show-button show-button--pink" disabled={busy || botBusy} onClick={quickPlayBot}><Swords size={20} />{botBusy ? 'يزن عم يجهز…' : 'تحدّى يزن (بوت)'}</button>
             </div>
             <div className="show-hero__links">
@@ -137,7 +137,7 @@ export function TitleHub({
 
         <section className="show-lineup" aria-labelledby="lineup-title">
           <div className="show-lineup__head">
-            <h2 id="lineup-title">اختار جوّ الجولة</h2>
+            <h2 id="lineup-title">تدريب على فقرة منفردة</h2>
             <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
               {expanded ? 'عرض أقل' : 'كل الجولات'} <ArrowDownLeft size={17} />
             </button>
@@ -173,7 +173,7 @@ export function TitleHub({
           {error && <p role="alert">{error}</p>}
           <div className="show-dialog__actions">
             <button type="submit" className="show-button show-button--yellow">شاشة الجمهور</button>
-            <button type="button" className="show-button show-button--cream" onClick={() => join('host')}>هاتف المشرف</button>
+            <button type="button" className="show-button show-button--cream" onClick={() => join('host')}>شاشة الحكم</button>
             <button type="button" className="show-link" onClick={() => joinDialog.current?.close()}>إغلاق</button>
           </div>
         </form>

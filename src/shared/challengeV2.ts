@@ -3,7 +3,7 @@ import type { QuestionRecord } from './types';
 export type SectionV2 = 'knowledge' | 'auction' | 'buzzer' | 'identity' | 'impossible' | 'comeback' | 'tiebreak';
 export type StageV2 = 'ready' | 'reading' | 'bidding' | 'answering' | 'buzz_open' | 'judging' | 'result' | 'finished' | 'cancelled';
 export const SECTIONS_V2: Record<SectionV2, { title: string; rules: string }> = {
-  knowledge: { title: 'ماذا تعرف؟', rules: 'مواجهتان؛ لكل فريق 30 ثانية مستقلة. الفوز 3 نقاط والتعادل نقطة لكل فريق.' },
+  knowledge: { title: 'ماذا تعرف؟', rules: 'سؤال مشترك؛ يتناوب الفريقان على إجابات مختلفة. ثلاثة أخطاء على الفريق تخسره نقطة.' },
   auction: { title: 'المزاد', rules: '5 ثوانٍ لكل قرار ثم 30 ثانية للتنفيذ. النجاح 3 نقاط، والفشل نقطتان للخصم.' },
   buzzer: { title: 'الجرس', rules: '6 أسئلة. افتح الجرس بعد القراءة. الصحيح نقطتان؛ فرصة الخصم 5 ثوانٍ مقابل نقطة.' },
   identity: { title: 'من أنا؟', rules: 'سؤالان مشتركان. 3 ثم 2 ثم نقطة. محاولة واحدة لكل فريق في مستوى التلميح.' },
@@ -42,10 +42,10 @@ export interface StateV2 {
 }
 export type ActionV2 = 'start' | 'advance' | 'begin' | 'open_buzzer' | 'buzz' | 'submit' | 'mark_correct' | 'mark_wrong' |
   'skip' | 'raise' | 'challenge' | 'next_clue' | 'pause' | 'resume' | 'undo' | 'object' | 'resolve_objection' |
-  'extra_time' | 'swap' | 'cancel' | 'cancel_attempt';
+  'extra_time' | 'swap' | 'cancel' | 'cancel_attempt' | 'judge_spoken';
 export interface EventV2 {
   id: string; revision: number; turnId: string; questionInstanceId: string; action: ActionV2;
-  team?: number; text?: string; value?: number; attemptId?: string; objectionId?: string;
+  team?: number; text?: string; value?: number; attemptId?: string; objectionId?: string; correct?: boolean;
 }
 export interface ViewV2 {
   revision: number; stage: StageV2; section: SectionV2; sectionTitle: string; rules: string;
@@ -54,6 +54,7 @@ export interface ViewV2 {
   clue: number; guessed: number[]; failed: number[]; points: number;
   deadline: number | null; remainingMs: number; paused: boolean; timerKind: CoreV2['timerKind'];
   bid: number; bidder: number; bidTurn: number; bidMax: number; acceptedCount: number;
+  knowledgeStrikes?: [number,number];
   cardsEnabled: boolean; cards: CoreV2['cards']; notice: string;
   plan: Array<{ section: SectionV2; title: string; questions: number }>;
   host?: { attempts: AttemptV2[]; ledger: ScoreV2[]; objections: ObjectionV2[]; accepted: string[]; undoCount: number };

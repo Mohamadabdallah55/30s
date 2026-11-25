@@ -27,13 +27,14 @@ test('real bank preflight builds equal fixed pairs, reserves equivalent cards an
     const filters={bankId:FULL_BANK_ID,ageGroup:'family' as const,difficulty:'mixed' as const,participantProfileIds:[]};
     for(const cards of [false,true]) {
       const plan=prepareMatchV2(db,filters,cards),ids=new Set<string>(),concepts=new Set<string>();
-      assert.equal(plan.length,24);
+      assert.equal(plan.length,22);
+      assert.equal(plan.filter(s=>s.section==='knowledge'&&s.team===null).length,2);
       for(const s of plan)for(const q of [...s.questions,...(s.replacement?[s.replacement]:[])]) {
         assert.ok(!ids.has(q.id));ids.add(q.id);
         if(q.conceptId){assert.ok(!concepts.has(q.conceptId));concepts.add(q.conceptId);}
         if(s.section==='impossible'){assert.equal(q.difficultyLevel,5);assert.ok(q.sourceExcerpt);assert.equal(q.options.length,0);}
       }
-      for(const section of ['knowledge','comeback'])for(const encounter of [0,1]) {
+      for(const section of ['comeback'])for(const encounter of [0,1]) {
         const [a,b]=plan.filter(s=>s.section===section&&s.encounter===encounter);
         assert.equal(a.questions.length,b.questions.length);
         a.questions.forEach((q,i)=>assert.equal(pairSignature(q),pairSignature(b.questions[i])));
@@ -82,13 +83,13 @@ test('HTTP and WebSocket: complete V2 match, buzzer race, undo database effects,
     const pending=view.challengeV2!.host!.attempts.find(a=>a.correct===null)!;
     await action('mark_correct',{attemptId:pending.id});
     if(view.challengeV2!.paused)await action('resume');
-    expire();await action('advance');
+    await action('skip');await action('advance');
     assert.equal((await post(`/api/sessions/${view.code}/action`,{action:'award_team',payload:{teamIndex:0}})).status,400);
     let ranRace=false;
     for(let guard=0;view.challengeV2!.stage!=='finished'&&guard<40;guard++) {
       const v=view.challengeV2!;
       assert.equal(v.stage,'reading');
-      if(v.section==='knowledge'){await action('begin');await answer(v.team!,hub.getSessionInternal(view.code)!.currentQuestion!.acceptableAnswers[0]);expire();}
+      if(v.section==='knowledge'){await action('begin');await answer(v.team!,hub.getSessionInternal(view.code)!.currentQuestion!.acceptableAnswers[0]);await action('skip');}
       else if(v.section==='auction'){
         await action('begin');await action('challenge',{team:view.challengeV2!.bidTurn});
         const q=hub.getSessionInternal(view.code)!.currentQuestion!;

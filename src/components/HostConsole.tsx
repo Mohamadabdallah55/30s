@@ -46,6 +46,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
   const [bidAnswerInput, setBidAnswerInput] = useState('');
   const [extraListItem, setExtraListItem] = useState('');
   const [matchedItems, setMatchedItems] = useState(1);
+  const [localAnswerVisible, setLocalAnswerVisible] = useState(false);
   const actionInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [qrMode, setQrMode] = useState<'host' | 'projector'>('host');
@@ -81,7 +82,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
     }
   };
 
-  useEffect(() => { setMatchedItems(1); setExtraListItem(''); }, [session?.currentQuestion?.id]);
+  useEffect(() => { setMatchedItems(1); setExtraListItem(''); setLocalAnswerVisible(false); }, [session?.currentQuestion?.id, session?.currentQuestionIndexInRound, session?.currentRoundIndex]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -100,7 +101,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
         act(session.phase === 'round_summary' ? 'next_round' : 'next_question');
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
-        if (!session.answerRevealed) act('reveal_answer');
+        if (!session.answerRevealed) setLocalAnswerVisible(visible => !visible);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -193,8 +194,8 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
       : 0;
 
   return (
-    <div className="show-host min-h-screen text-slate-50 p-4 sm:p-6">
-      <div className="max-w-6xl mx-auto space-y-5">
+    <div className="show-host v2-live-stage lesson-live-stage min-h-screen text-slate-50">
+      <div className="w-full mx-auto space-y-3">
         {/* Top Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -207,7 +208,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
               <span>عودة خطوة</span>
             </button>
             <div>
-              <h1 className="text-lg font-black text-white">هاتف الحكم</h1>
+              <h1 className="text-lg font-black text-white">شاشة المباراة</h1>
               <div className="text-xs text-slate-300 flex items-center gap-2">
                 <span>
                   الرمز: <strong className="font-mono text-amber-300">{session.code}</strong>
@@ -250,12 +251,12 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
               className="px-4 py-2 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 text-xs font-black inline-flex items-center gap-1.5"
             >
               <MonitorPlay className="w-4 h-4" />
-              <span>عرض شاشة الجمهور (16:9)</span>
+              <span>عرض الجمهور (اختياري)</span>
             </button>
           </div>
         </div>
 
-        <div className="show-host__ribbon"><ScoreRibbon session={session} /></div>
+
         {(session.phase === 'vs' || session.phase === 'round_intro' || session.phase === 'countdown') && <div className="show-host__intermission"><ShowIntermission session={session} countdown={countdown} /></div>}
         {error && <p role="alert" className="rounded-xl bg-rose-500/20 p-3 text-rose-100">{error}</p>}
         {session.phase === 'round_summary' || session.phase === 'finished' ? (
@@ -282,11 +283,12 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
             onClick={() => { if (window.confirm('تنتقل إلى هذه الجولة الآن؟')) act('jump_round', { roundIndex: index }); }}>
             {index + 1} · {item.titleAr}</button>)}</div>
         </details>}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        <div className="v2-live-layout">
+          <aside className="v2-live-rail"><div className="v2-live-score">{session.teams.map(team => <div key={team.index} className="v2-live-team" style={{borderColor:team.color}} data-active={(session.buzzedTeamIndex ?? session.activeTeamIndex) === team.index}><span>{team.name}</span><strong dir="ltr">{team.points}</strong></div>)}</div><div className="v2-live-status rounded-2xl bg-[#29183E] text-center border-2 border-[#FFE45A]"><h1 className="font-black">{round?.titleAr || roundMeta?.nameAr}</h1><div className="font-black tabular-nums text-amber-300" aria-label="الوقت المتبقي">{String(Math.floor(session.timerRemainingSec / 60)).padStart(2, "0")}:{String(session.timerRemainingSec % 60).padStart(2, "0")}</div><p>الجولة {session.currentRoundIndex + 1} / {session.rounds.length}</p></div><div className="v2-live-progress">{session.rounds.map((item,index) => <span key={index} data-current={index === session.currentRoundIndex}>{item.titleAr}</span>)}</div></aside>
           {/* Left: Active Question, Secret Answer & Analytics */}
-          <div className="lg:col-span-8 space-y-4">
+          <div className="v2-live-body">
             {/* Round & Timer Controls */}
-            <div className="show-host__tools rounded-2xl bg-[#101E52] border border-sky-400/25 p-4 flex flex-wrap items-center justify-between gap-4">
+            <div className="show-host__tools v2-live-controls rounded-2xl bg-[#101E52] border border-sky-400/25 p-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-xs text-violet-300 font-bold flex items-center gap-2">
                   <span>
@@ -296,9 +298,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                     <span className="text-sky-300">(العداد متواصل)</span>
                   )}
                 </div>
-                <div className="text-3xl font-black tabular-nums text-sky-300 mt-0.5">
-                  00:{String(session.timerRemainingSec).padStart(2, '0')}
-                </div>
+
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -366,16 +366,20 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                   </span>
                 </div>
 
-                <div className="show-host__question rounded-xl">
+                <div className="v2-live-question rounded-3xl bg-[#FFF9ED] text-[#29183E] text-center">
                   <div className="text-xs mb-1 flex items-center gap-2"><RoundArt type={q.roundType} /> السؤال المعروض للجمهور</div>
-                  <div className="text-lg font-extrabold">{q.prompt}</div>
+                  <h2 className="font-black">{q.prompt}</h2>
+                  {q.revealedClues.map((clue,i) => <p key={i} className="rounded-xl bg-violet-100 p-3">{clue}</p>)}
+                  {session.memoryPhase === "memorize" && q.memoryItems?.length ? <div className="flex flex-wrap gap-2 justify-center">{q.memoryItems.map((item,i)=><span key={i} className="rounded-lg bg-violet-100 p-2">{item}</span>)}</div> : null}
+                  {q.options.length > 0 && <div className="grid grid-cols-2 gap-2 w-full">{q.options.map((option,i)=><span key={i} className="rounded-lg border border-violet-300 p-2">{option}</span>)}</div>}
+                  {session.memoryPhase !== "memorize" && <button type="button" aria-expanded={localAnswerVisible || session.answerRevealed} className="show-button show-button--yellow v2-live-reveal" onClick={()=>setLocalAnswerVisible(v=>!v)}>{localAnswerVisible || session.answerRevealed ? "الإجابة الصحيحة" : "كشف الإجابة"}</button>}
                 </div>
 
                 {/* Secret Host Answer Block */}
-                <div className="rounded-xl bg-emerald-500/15 border border-emerald-400/40 p-4 space-y-2">
-                  <div className="text-xs font-bold text-emerald-300">الإجابة الصحيحة (سرية للمشرف فقط):</div>
-                  <div className="text-xl font-black text-white">
-                    {secret?.acceptableAnswers?.join('  |  ') || '—'}
+                {(localAnswerVisible || session.answerRevealed) && session.memoryPhase !== "memorize" && <div className="v2-live-revealed">
+                  <div className="text-xs font-bold">الإجابة الصحيحة</div>
+                  <div className="text-xl font-black">
+                    {secret?.acceptableAnswers?.join('  |  ') || (typeof secret.correctIndex === "number" ? q.options[secret.correctIndex] : "") || '—'}
                   </div>
                   {secret?.oddReason && (
                     <div className="text-xs text-amber-200">سبب الاختلاف: {secret.oddReason}</div>
@@ -386,7 +390,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                       {secret.sourcePage ? `صفحة ${secret.sourcePage}` : 'المصدر'}: «{secret.sourceExcerpt}»
                     </div>
                   )}
-                </div>
+                </div>}
 
                 {q.roundType === 'buzzer' && session.settings.showMode && session.buzzedTeamIndex === null && session.timerRunning &&
                   <div className="show-host__items"><strong>سجّل أول ضغطة</strong><div>{session.teams.map((team) =>
@@ -444,7 +448,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                       </div>
                     ) : (
                       <div className="space-y-2.5">
-                        {secret?.acceptableAnswers && secret.acceptableAnswers.length > 0 && !session.answerRevealed && (
+                        {localAnswerVisible && secret?.acceptableAnswers && secret.acceptableAnswers.length > 0 && !session.answerRevealed && (
                           <div className="space-y-1">
                             <div className="text-[11px] text-slate-400">
                               نقرة سريعة لتسجيل ما يذكره المتسابق شفهياً:
@@ -519,7 +523,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                   </div>
                 )}
 
-                {inPlay && session.settings.showMode && q.roundType === 'list_multiple' && (
+                {inPlay && localAnswerVisible && session.settings.showMode && q.roundType === 'list_multiple' && (
                   <div className="show-host__items">
                     <strong>القطع المقبولة {session.listProgress?.accepted ?? 0}/{session.listProgress?.required ?? 3}</strong>
                     <div>{[...new Set([...secret.acceptableAnswers, ...(secret.acceptedItems ?? [])])].map((item) => <button type="button" key={item} aria-pressed={secret.acceptedItems?.includes(item) ?? false}
@@ -552,7 +556,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                       disabled={busy || (session.settings.showMode && q.roundType === 'buzzer' && session.buzzedTeamIndex !== t.index) ||
                         (session.settings.showMode && q.roundType === 'list_multiple' && !session.listProgress?.accepted)}
                       onClick={() => act('award_team', { teamIndex: t.index, matchedListCount: q.roundType === 'list_multiple' ? matchedItems : undefined })}
-                      className="py-3 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap truncate"
+                      className="py-4 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-base inline-flex items-center justify-center gap-1.5 whitespace-nowrap truncate"
                     >
                       <Check className="w-4 h-4 shrink-0" />
                       <span className="truncate">صح: {t.name}</span>
@@ -561,10 +565,10 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                   <button
                     type="button"
                     onClick={() => act('strike_team', { teamIndex: session.buzzedTeamIndex ?? session.activeTeamIndex })}
-                    className="py-3 px-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-black text-xs inline-flex items-center justify-center gap-1.5"
+                    className="py-4 px-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-black text-base inline-flex items-center justify-center gap-1.5"
                   >
                     <X className="w-4 h-4" />
-                    <span>خطأ / سترايك</span>
+                    <span>غلط</span>
                   </button>
                   <button
                     type="button"
@@ -684,7 +688,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
           </div>
 
           {/* Right: Score Adjustments, Phone Buzzers, Participant Swap, QR & Objections */}
-          <div className="lg:col-span-4 space-y-4">
+          <details className="v2-live-advanced rounded-2xl bg-[#101E52] p-4 space-y-3"><summary className="font-black cursor-pointer">إعدادات إضافية وروابط الأجهزة</summary><div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
             <div className="rounded-2xl bg-[#101E52] border border-sky-400/25 p-4 space-y-3">
               <h2 className="text-sm font-extrabold text-white">تعديل النقاط المباشر</h2>
               {session.teams.map((t) => (
@@ -892,7 +896,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                 </div>
               )}
             </div>
-          </div>
+          </div></details>
         </div>
         <div className="text-center text-[11px] text-slate-400 pt-1">
           اختصارات المشرف: Space بدء/إيقاف المؤقت · N السؤال التالي · R إظهار الإجابة

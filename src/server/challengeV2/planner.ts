@@ -66,11 +66,11 @@ export function prepareMatchV2(db: Database.Database, filters: Omit<SelectionReq
   const shared = (section: SectionV2, n: number, points: number, predicate: (q: QuestionRecord) => boolean, source = pool) => {
     for (let i = 0; i < n; i++) {
       const q = source.find(q => available(q) && predicate(q) && (!cards || ['buzzer','tiebreak'].includes(section) || source.some(p=>available(p)&&p.id!==q.id&&(!q.conceptId||p.conceptId!==q.conceptId)&&pairSignature(p)===pairSignature(q)&&predicate(p))));
-      if (!q) throw new Error(`الأسئلة المعتمدة غير كافية لفقرة ${section}. لا يتم استبدال النوع أو تكرار الأسئلة تلقائيًا.`);
+      if (!q) throw new Error(`لا توجد أسئلة معتمدة كافية لفقرة ${section}. لا يتم استبدال النوع أو تكرار الأسئلة تلقائيًا.`);
       slot(section, i, null, points, [take(q)]);
     }
   };
-  paired('knowledge', 0, 3); paired('knowledge', 1, 3);
+  shared('knowledge', 2, 1, q => q.roundType === 'list_multiple' && q.acceptableAnswers.length >= 3 && !q.unsuitableForTimed);
   shared('auction', 2, 3, q => q.roundType === 'bid_challenge' && (q.bidMaximum ?? 0) > (q.bidMinimum ?? 1));
   shared('buzzer', 6, 2, plain);
   shared('identity', 2, 3, q => q.roundType === 'who_am_i' && q.clues.length >= 3);
