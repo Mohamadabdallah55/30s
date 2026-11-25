@@ -1,11 +1,11 @@
 import type { QuestionRecord } from './types';
 
 export type SectionV2 = 'knowledge' | 'auction' | 'buzzer' | 'identity' | 'impossible' | 'comeback' | 'tiebreak';
-export type StageV2 = 'ready' | 'reading' | 'bidding' | 'answering' | 'buzz_open' | 'judging' | 'result' | 'finished' | 'cancelled';
+export type StageV2 = 'ready' | 'reading' | 'bidding' | 'auction_ready' | 'answering' | 'buzz_open' | 'judging' | 'result' | 'finished' | 'cancelled';
 export const SECTIONS_V2: Record<SectionV2, { title: string; rules: string }> = {
-  knowledge: { title: 'ماذا تعرف؟', rules: 'سؤال مشترك؛ يتناوب الفريقان على إجابات مختلفة. ثلاثة أخطاء على الفريق تخسره نقطة.' },
-  auction: { title: 'المزاد', rules: '5 ثوانٍ لكل قرار ثم 30 ثانية للتنفيذ. النجاح 3 نقاط، والفشل نقطتان للخصم.' },
-  buzzer: { title: 'الجرس', rules: '6 أسئلة. افتح الجرس بعد القراءة. الصحيح نقطتان؛ فرصة الخصم 5 ثوانٍ مقابل نقطة.' },
+  knowledge: { title: 'ماذا تعرف؟', rules: 'سؤال مشترك؛ 7 ثوانٍ لكل دور، وباس واحد لكل فريق في السؤال دون خطأ. ثلاثة أخطاء على الفريق تخسره نقطة.' },
+  auction: { title: 'المزاد', rules: 'مزايدة دون عد تنازلي. يبدأ عدّ 30 ثانية للتنفيذ فقط بعد تأكيد الجاهزية. النجاح 3 نقاط، والفشل نقطتان للخصم.' },
+  buzzer: { title: 'الجرس', rules: '6 أسئلة. افتح الجرس بعد القراءة. الصحيح نقطتان؛ فرصة الخصم مقابل نقطة.' },
   identity: { title: 'من أنا؟', rules: 'سؤالان مشتركان. 3 ثم 2 ثم نقطة. محاولة واحدة لكل فريق في مستوى التلميح.' },
   impossible: { title: 'المستحيل', rules: 'سؤالان موثقان من المستوى الخامس، دون اختيارات. 4 نقاط للإجابة الصحيحة.' },
   comeback: { title: 'التعويض', rules: 'سؤالان متكافئان لكل فريق بقيمة 3 ثم 2. يبدأ الفريق المتأخر.' },
@@ -42,7 +42,7 @@ export interface StateV2 {
 }
 export type ActionV2 = 'start' | 'advance' | 'begin' | 'open_buzzer' | 'buzz' | 'submit' | 'mark_correct' | 'mark_wrong' |
   'skip' | 'raise' | 'challenge' | 'next_clue' | 'pause' | 'resume' | 'undo' | 'object' | 'resolve_objection' |
-  'extra_time' | 'swap' | 'cancel' | 'cancel_attempt' | 'judge_spoken';
+  'extra_time' | 'swap' | 'cancel' | 'cancel_attempt' | 'judge_spoken' | 'pass' | 'start_auction';
 export interface EventV2 {
   id: string; revision: number; turnId: string; questionInstanceId: string; action: ActionV2;
   team?: number; text?: string; value?: number; attemptId?: string; objectionId?: string; correct?: boolean;
@@ -55,6 +55,7 @@ export interface ViewV2 {
   deadline: number | null; remainingMs: number; paused: boolean; timerKind: CoreV2['timerKind'];
   bid: number; bidder: number; bidTurn: number; bidMax: number; acceptedCount: number;
   knowledgeStrikes?: [number,number];
+  knowledgePasses?: [boolean,boolean];
   cardsEnabled: boolean; cards: CoreV2['cards']; notice: string;
   plan: Array<{ section: SectionV2; title: string; questions: number }>;
   host?: { attempts: AttemptV2[]; ledger: ScoreV2[]; objections: ObjectionV2[]; accepted: string[]; undoCount: number };

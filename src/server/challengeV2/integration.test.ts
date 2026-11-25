@@ -91,7 +91,7 @@ test('HTTP and WebSocket: complete V2 match, buzzer race, undo database effects,
       assert.equal(v.stage,'reading');
       if(v.section==='knowledge'){await action('begin');await answer(v.team!,hub.getSessionInternal(view.code)!.currentQuestion!.acceptableAnswers[0]);await action('skip');}
       else if(v.section==='auction'){
-        await action('begin');await action('challenge',{team:view.challengeV2!.bidTurn});
+        await action('begin');await action('challenge',{team:view.challengeV2!.bidTurn});await action('start_auction');
         const q=hub.getSessionInternal(view.code)!.currentQuestion!;
         for(const text of q.acceptableAnswers.slice(0,view.challengeV2!.bid))await answer(view.challengeV2!.bidder,text);
         expire();

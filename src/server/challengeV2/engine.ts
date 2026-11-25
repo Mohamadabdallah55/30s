@@ -24,15 +24,17 @@ export function createStateV2(plan: SlotV2[], cardsEnabled: boolean): StateV2 {
 }
 const sharedKnowledge=(slot:SlotV2)=>slot.section==='knowledge'&&slot.team===null;
 const strikeKey=(slot:SlotV2,team:number)=>slot.id+':strike:'+team;
-function rotateKnowledge(s:StateV2,team:number,correct:boolean,now:number) {
+const passKey=(slot:SlotV2,team:number)=>slot.id+':pass:'+team;
+const untimed=(c:CoreV2)=>{c.deadline=null;c.remainingMs=0;c.paused=false;c.timerKind='transition';};
+function rotateKnowledge(s:StateV2,team:number,correct:boolean,now:number,pass=false) {
   const c=s.core,slot=currentSlotV2(s),q=currentQuestionV2(s);
-  if(!correct){
+  if(!correct&&!pass){
     const key=strikeKey(slot,team);
     c.counts[key]=(c.counts[key]??0)+1;
     if(c.counts[key]>=3){awardV2(c,slot,team,-1,'ثلاثة أخطاء في ماذا تعرف');closeV2(c);return;}
   }
   if(!q.acceptsOtherAnswers&&c.accepted.length>=new Set(q.acceptableAnswers.map(normalizeChallengeItem)).size){closeV2(c);return;}
-  c.team=1-team;c.turnId=uid();c.stage='answering';turnClock(c,now,10000,'answer');
+  c.team=1-team;c.turnId=uid();c.stage='answering';turnClock(c,now,7000,'answer');
 }
 function loadSlot(s: StateV2, now: number) {
   const c=s.core, slot=currentSlotV2(s), q=currentQuestionV2(s);
@@ -41,7 +43,7 @@ function loadSlot(s: StateV2, now: number) {
   c.shown.push(q.id);
   c.bid=q.bidMinimum ?? 1; c.bidder=slot.encounter%2; c.bidTurn=1-c.bidder;
   c.bidMax=Math.min(q.bidMaximum ?? q.acceptableAnswers.length,q.acceptableAnswers.length);
-  turnClock(c,now,12000,'reading');
+  untimed(c);
 }
 function finishTurn(s: StateV2) {
   const c=s.core, slot=currentSlotV2(s);
@@ -53,20 +55,20 @@ function wrong(s: StateV2, now: number) {
   const c=s.core, slot=currentSlotV2(s), team=c.team!;
   if(['buzzer','tiebreak'].includes(slot.section)) {
     if(!c.failed.includes(team))c.failed.push(team);
-    if(c.failed.length===1){c.team=1-team;c.turnId=uid();c.stage='answering';turnClock(c,now,5000,'answer');}
+    if(c.failed.length===1){c.team=1-team;c.turnId=uid();c.stage='answering';untimed(c);}
     else closeV2(c);
   } else if(slot.section==='identity') {
-    c.team=null;c.stage='answering'; turnClock(c,now,Math.max(1,c.remainingMs),'hint');
+    c.team=null;c.stage='answering'; untimed(c);
   } else if(slot.section==='impossible') {
     if(!c.failed.includes(team))c.failed.push(team);
-    if(c.failed.length<2){c.team=null;c.turnId=uid();c.stage='buzz_open';turnClock(c,now,10000,'answer');}
+    if(c.failed.length<2){c.team=null;c.turnId=uid();c.stage='buzz_open';untimed(c);}
     else closeV2(c);
   } else if(slot.section==='comeback')closeV2(c);
 }
 function nextClue(s: StateV2, now: number) {
   const c=s.core;
   if(c.clue>=2){closeV2(c);return;}
-  c.clue++; c.guessed=[]; c.team=null;c.turnId=uid();c.stage='answering';turnClock(c,now,15000,'hint');
+  c.clue++; c.guessed=[]; c.team=null;c.turnId=uid();c.stage='answering';untimed(c);
 }
 export function tickV2(s: StateV2, now: number): boolean {
   const c=s.core;
@@ -77,7 +79,7 @@ export function tickV2(s: StateV2, now: number): boolean {
   if (s.undo.length > 80) s.undo.shift();
   c.remainingMs=0;c.deadline=null;
   if(c.stage==='reading') { c.notice='انتهت القراءة؛ افتح التحدي من لوحة المقدم.'; }
-  else if(c.stage==='bidding') { c.stage='answering';c.team=c.bidder;c.turnId=uid();turnClock(c,now,30000,'answer'); }
+  else if(c.stage==='bidding') { c.stage='auction_ready';c.team=c.bidder;c.turnId=uid();untimed(c); }
   else if(c.stage==='buzz_open'){closeV2(c);}
   else if(c.stage==='answering') {
     const pending=c.attempts.some(a=>a.slotId===currentSlotV2(s).id&&a.correct===null);
@@ -99,12 +101,12 @@ export function applyEventV2(s: StateV2, e: EventV2, actor: {host:boolean;team?:
   if(c.deadline!==null)c.remainingMs=Math.max(0,c.deadline-now);
   if(!e.id || e.id.length>100 || !Number.isInteger(e.revision) || e.revision!==n.revision || e.turnId!==c.turnId || e.questionInstanceId!==c.questionInstanceId)
     throw new Error('وصل إجراء قديم؛ انتظر تحديث المباراة وحاول مرة ثانية.');
-  if(!actor.host && !['buzz','submit','raise','challenge','extra_time','swap','object'].includes(e.action))throw new Error('هذا الإجراء للمقدم فقط.');
+  if(!actor.host && !['buzz','submit','raise','challenge','extra_time','swap','object','pass'].includes(e.action))throw new Error('هذا الإجراء للمقدم فقط.');
   const team=actor.host ? e.team ?? c.team : actor.team;
   if(team!=null && team!==0&&team!==1)throw new Error('فريق غير صالح.');
   const need: (valid: unknown, message?: string) => asserts valid = (valid, message='الإجراء غير متاح في المرحلة الحالية.') => {if(!valid)throw new Error(message);};
   const slot=currentSlotV2(n), q=currentQuestionV2(n);
-  const active=()=>need(!c.paused&&c.stage==='answering'&&c.deadline!==null&&now<c.deadline,'انتهى وقت تقديم الإجابات أو لم يبدأ.');
+  const active=()=>need(!c.paused&&c.stage==='answering'&&(c.deadline===null||now<c.deadline),'انتهى وقت تقديم الإجابات أو لم يبدأ.');
   if(e.action==='judge_spoken') {
     need(actor.host&&typeof e.correct==='boolean','التحكيم الشفهي للمقدم فقط.');
     const submitted=applyEventV2(n,{...e,id:uid(),action:'submit'},actor,now);
@@ -127,15 +129,15 @@ export function applyEventV2(s: StateV2, e: EventV2, actor: {host:boolean;team?:
       case 'start': need(c.stage==='ready');loadSlot(n,now);break;
       case 'begin':
         need(c.stage==='reading'&&!c.paused);
-        if(slot.section==='auction'){c.stage='bidding';c.team=null;turnClock(c,now,5000,'decision');}
+        if(slot.section==='auction'){c.stage='bidding';c.team=null;untimed(c);}
         else if(['buzzer','tiebreak','impossible'].includes(slot.section))throw new Error('افتح الجرس بعد القراءة.');
-        else {c.stage='answering';turnClock(c,now,slot.section==='identity'?15000:sharedKnowledge(slot)?10000:30000,slot.section==='identity'?'hint':'answer');}
+        else {c.stage='answering';if(sharedKnowledge(slot))turnClock(c,now,7000,'answer');else if(slot.section==='knowledge')turnClock(c,now,30000,'answer');else untimed(c);}
         break;
       case 'open_buzzer': need(c.stage==='reading'&&!c.paused&&['buzzer','tiebreak','impossible'].includes(slot.section));
-        c.stage='buzz_open';c.team=null;turnClock(c,now,15000,'answer');break;
+        c.stage='buzz_open';c.team=null;untimed(c);break;
       case 'buzz':
         need(c.stage==='buzz_open'&&!c.paused&&team!=null&&!c.failed.includes(team));
-        c.team=team;c.turnId=uid();c.stage='answering';turnClock(c,now,slot.section==='impossible'?30000:10000,'answer');break;
+        c.team=team;c.turnId=uid();c.stage='answering';untimed(c);break;
       case 'submit': {
         active();need(team!=null&&(c.team===team||slot.section==='identity'),'الدور لفريق آخر.');
         need(typeof e.text==='string'&&e.text.trim().length>0&&e.text.length<=600,'اكتب الإجابة أو اسم العنصر.');
@@ -190,17 +192,23 @@ export function applyEventV2(s: StateV2, e: EventV2, actor: {host:boolean;team?:
             c.team = null;
           }
           c.stage = 'answering';
-          turnClock(c, now, Math.max(1, c.remainingMs), slot.section === 'identity' ? 'hint' : 'answer');
+          untimed(c);
         }
         else if(c.stage==='judging'&&!c.attempts.some(a=>a.slotId===slot.id&&a.correct===null))finishTurn(n);
         break;
       }
       case 'raise':need(c.stage==='bidding'&&!c.paused&&team===c.bidTurn,'المزايدة لفريق آخر.');
         need(Number.isInteger(e.value)&&e.value!>c.bid&&e.value!<=c.bidMax,'راجع سقف المزايدة.');
-        c.bid=e.value!;c.bidder=team!;c.bidTurn=1-team!;c.turnId=uid();turnClock(c,now,5000,'decision');
-        if(c.bid===c.bidMax){c.stage='answering';c.team=c.bidder;turnClock(c,now,30000,'answer');}break;
+        c.bid=e.value!;c.bidder=team!;c.bidTurn=1-team!;c.turnId=uid();untimed(c);
+        if(c.bid===c.bidMax){c.stage='auction_ready';c.team=c.bidder;}break;
       case 'challenge':need(c.stage==='bidding'&&!c.paused&&team===c.bidTurn);
-        c.stage='answering';c.team=c.bidder;c.turnId=uid();turnClock(c,now,30000,'answer');break;
+        c.stage='auction_ready';c.team=c.bidder;c.turnId=uid();untimed(c);break;
+      case 'start_auction':need(actor.host&&slot.section==='auction'&&c.stage==='auction_ready'&&!c.paused);
+        c.stage='answering';c.turnId=uid();turnClock(c,now,30000,'answer');break;
+      case 'pass':
+        active();need(sharedKnowledge(slot)&&team!=null&&team===c.team,'الباس لصاحب الدور في ماذا تعرف فقط.');
+        need(!c.counts[passKey(slot,team)]&&!c.attempts.some(a=>a.slotId===slot.id&&a.correct===null),'الباس مستخدم أو هناك إجابة تنتظر التحكيم.');
+        c.counts[passKey(slot,team)]=1;rotateKnowledge(n,team,false,now,true);break;
       case 'next_clue': need(slot.section==='identity'&&c.stage==='answering'&&!c.paused);nextClue(n,now);break;
       case 'skip':
         need(['reading','answering','buzz_open'].includes(c.stage)&&!c.paused);
@@ -223,7 +231,7 @@ export function applyEventV2(s: StateV2, e: EventV2, actor: {host:boolean;team?:
         need(n.cardsEnabled&&team!=null&&!['buzzer','tiebreak'].includes(slot.section),'البطاقات غير مسموحة هنا.');
         need(c.team===team&&['reading','answering'].includes(c.stage)&&!c.paused,'البطاقة لصاحب الدور فقط.');
         if(e.action==='extra_time'){
-          need(!c.cards[team].time&&c.stage==='answering');c.cards[team].time=true;c.deadline!+=10000;c.remainingMs+=10000;
+          need(!c.cards[team].time&&c.stage==='answering'&&c.deadline!==null&&!sharedKnowledge(slot));c.cards[team].time=true;c.deadline!+=10000;c.remainingMs+=10000;
         }else{
           need(!c.cards[team].swap&&slot.replacement&&!c.swapped.includes(slot.id+':'+c.questionIndex)&&!c.attempts.some(a=>a.slotId===slot.id&&a.questionId===q.id),'التبديل قبل الإجابة فقط.');
           need(slot.section!=='auction' || (slot.replacement!.bidMaximum??0)>=c.bid,'البديل لا يدعم المزايدة الحالية.');
@@ -252,7 +260,7 @@ export function viewStateV2(s: StateV2, host: boolean, now=Date.now()): ViewV2 {
     points:slot.section==='identity'?3-c.clue:slot.points,deadline:c.deadline,
     remainingMs:c.deadline?Math.max(0,c.deadline-now):c.remainingMs,paused:c.paused,timerKind:c.timerKind,
     bid:c.bid,bidder:c.bidder,bidTurn:c.bidTurn,bidMax:c.bidMax,acceptedCount:c.accepted.length,
-    ...(sharedKnowledge(slot)?{knowledgeStrikes:[c.counts[strikeKey(slot,0)]??0,c.counts[strikeKey(slot,1)]??0] as [number,number]}:{}),
+    ...(sharedKnowledge(slot)?{knowledgeStrikes:[c.counts[strikeKey(slot,0)]??0,c.counts[strikeKey(slot,1)]??0] as [number,number],knowledgePasses:[Boolean(c.counts[passKey(slot,0)]),Boolean(c.counts[passKey(slot,1)])] as [boolean,boolean]}:{}),
     cardsEnabled:s.cardsEnabled,cards:c.cards,notice:c.notice,
     plan:Object.entries(SECTIONS_V2).filter(([key])=>key!=='tiebreak').map(([key,meta])=>({section:key as SlotV2['section'],title:meta.title,questions:s.plan.filter(s=>s.section===key).length})),
     ...(host?{host:{attempts:c.attempts.filter(a=>a.slotId===slot.id),ledger:c.ledger,objections:c.objections,accepted:c.accepted,undoCount:s.undo.length}}:{}),

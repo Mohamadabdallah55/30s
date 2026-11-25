@@ -40,14 +40,14 @@ test('six sections: independent 30-second turns, auction success/failure, steal,
     h.act('advance');
   }
   assert.deepEqual(h.state.core.scores,[4,1]);
-  h.act('begin');h.act('raise',{team:h.state.core.bidTurn,value:3});
+  h.act('begin');h.act('raise',{team:h.state.core.bidTurn,value:3});h.act('start_auction');
   h.answer(h.state.core.bidder,true,'أحمد');h.answer(h.state.core.bidder,true,'محمد');h.answer(h.state.core.bidder,true,'علي');
   h.advanceTime(30000);h.act('advance');
-  h.act('begin');const losingBidder=h.state.core.bidder;h.advanceTime(5000);assert.equal(h.state.core.team,losingBidder);
+  h.act('begin');const losingBidder=h.state.core.bidder;h.act('challenge',{team:h.state.core.bidTurn});h.act('start_auction');assert.equal(h.state.core.team,losingBidder);
   h.advanceTime(30000);assert.equal(h.state.core.ledger.at(-1)?.points,2);h.act('advance');
   for(let i=0;i<6;i++){
     h.act('open_buzzer');h.act('buzz',{team:0});
-    h.answer(0,false);assert.equal(h.state.core.team,1);assert.equal(h.state.core.deadline!-h.now,5000);
+    h.answer(0,false);assert.equal(h.state.core.team,1);assert.equal(h.state.core.deadline,null);
     h.answer(1);assert.equal(h.state.core.ledger.at(-1)?.points,1);h.act('advance');
   }
   h.act('begin');h.answer(0,false);assert.throws(()=>h.act('submit',{team:0,text:'أحمد'}),/محاولتك/);
@@ -66,7 +66,7 @@ test('ties use reserved buzzer questions; duplicate and delayed commands cannot 
   h.act('start');h.act('open_buzzer');const e=h.event('buzz',{team:0});h.run(e);const revision=h.state.revision;
   h.run(e);assert.equal(h.state.revision,revision);
   assert.throws(()=>h.act('buzz',{team:1}),/متاح/);
-  h.advanceTime(10000);assert.equal(h.state.core.team,1);h.advanceTime(5000);h.act('advance');
+  h.answer(0,false);assert.equal(h.state.core.team,1);h.answer(1,false);h.act('advance');
   assert.equal(currentSlotV2(h.state).section,'tiebreak');assert.throws(()=>h.run({...e,id:crypto.randomUUID()}),/قديم/);
   h.act('open_buzzer');h.act('buzz',{team:1});h.answer(1);h.act('advance');
   assert.equal(h.state.core.stage,'finished');assert.deepEqual(h.state.core.scores,[0,1]);
@@ -92,7 +92,7 @@ test('canonical aliases cannot inflate counts; cards are single-use, equivalent 
   const h=harness([a,slot('knowledge',0,1)],true);h.act('start');
   h.act('swap',{team:0},false);assert.equal(currentQuestionV2(h.state).id,'replacement');
   assert.throws(()=>h.act('swap',{team:0},false));h.act('undo');
-  h.act('resume');h.act('begin');h.act('extra_time',{team:0},false);assert.equal(h.state.core.deadline!-h.now,40000);
+  h.act('begin');h.act('extra_time',{team:0},false);assert.equal(h.state.core.deadline!-h.now,40000);
   assert.throws(()=>h.act('extra_time',{team:0},false));
   h.answer(0,true,'احمد بن فلان');h.act('submit',{team:0,text:'أحمد'});
   assert.throws(()=>h.act('mark_correct',{attemptId:h.state.core.attempts.at(-1)!.id}),/محسوب/);
@@ -130,8 +130,42 @@ test('shared knowledge alternates, rejects duplicate answers, and deducts a poin
   h.act('judge_spoken',{team:1,text:'خطأ',correct:false});
   assert.equal(h.state.core.team,0);
   h.act('judge_spoken',{team:0,text:'محمد',correct:true});
-  h.advanceTime(10000);assert.equal(h.state.core.team,0);
+  h.advanceTime(7000);assert.equal(h.state.core.team,0);
   h.act('judge_spoken',{team:0,text:'خطأ',correct:false});
   h.act('judge_spoken',{team:1,text:'خطأ',correct:false});
   assert.equal(h.state.core.stage,'result');assert.deepEqual(h.state.core.scores,[0,-1]);
+});
+
+test('original timing: reading and bidding wait indefinitely; auction clock starts only on ready',()=>{
+  const h=harness([slot('auction',0)]);h.act('start');
+  assert.equal(h.state.core.deadline,null);assert.equal(h.advanceTime(60000),false);
+  h.act('begin');assert.equal(h.state.core.deadline,null);assert.equal(h.advanceTime(60000),false);
+  h.act('challenge',{team:h.state.core.bidTurn});
+  assert.equal(h.state.core.stage,'auction_ready');assert.equal(h.advanceTime(60000),false);
+  assert.throws(()=>h.act('start_auction',{},false),/للمقدم/);
+  h.act('start_auction');assert.equal(h.state.core.deadline!-h.now,30000);
+  h.advanceTime(30000);assert.equal(h.state.core.stage,'result');
+});
+test('each shared knowledge team has a single free pass, and every new turn lasts seven seconds',()=>{
+  const h=harness([slot('knowledge',0,null),slot('knowledge',1,null)]);
+  h.act('start');h.act('begin');assert.equal(h.state.core.deadline!-h.now,7000);
+  assert.throws(()=>h.act('pass',{team:1}),/صاحب الدور/);
+  h.act('pass',{team:0});assert.equal(h.state.core.team,1);assert.equal(h.state.core.deadline!-h.now,7000);
+  h.act('pass',{team:1},false);assert.equal(h.state.core.team,0);
+  assert.throws(()=>h.act('pass',{team:0}),/مستخدم/);
+  assert.deepEqual(h.state.core.scores,[0,0]);assert.equal(h.state.core.attempts.length,0);
+  h.act('judge_spoken',{team:0,text:'أحمد',correct:true});assert.equal(h.state.core.team,1);
+  assert.equal(h.state.core.deadline!-h.now,7000);
+  h.act('skip');h.act('advance');h.act('begin');h.act('pass',{team:1});
+  assert.equal(h.state.core.team,0);
+});
+test('buzzer, impossible, comeback and clues have no automatic countdown',()=>{
+  for(const section of ['buzzer','impossible','identity','comeback'] as const){
+    const h=harness([slot(section,0,section==='comeback'?0:null)]);
+    h.act('start');assert.equal(h.advanceTime(60000),false);
+    if(section==='buzzer'||section==='impossible'){h.act('open_buzzer');assert.equal(h.advanceTime(60000),false);h.act('buzz',{team:0});}
+    else h.act('begin');
+    assert.equal(h.state.core.deadline,null);assert.equal(h.advanceTime(60000),false);
+    h.answer(0);assert.equal(h.state.core.stage,'result');
+  }
 });
