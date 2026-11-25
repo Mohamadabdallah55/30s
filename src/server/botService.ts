@@ -106,7 +106,7 @@ export async function callJordanianBotGemini(
     }
     if (/429|RESOURCE_EXHAUSTED|quota/i.test(raw)) {
       throw new BotGeminiError(
-        'انشغلت حصة الذكاء الاصطناعي المجانية هسا (429). استخدم «مرشد نشمي الفوري» أو جرّب بعد شوي.',
+        'انشغلت حصة الذكاء الاصطناعي المجانية هسا (429). استخدم «مرشد يزن الفوري» أو جرّب بعد شوي.',
         429,
         'QUOTA_EXHAUSTED'
       );

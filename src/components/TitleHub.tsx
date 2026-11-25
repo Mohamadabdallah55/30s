@@ -78,7 +78,7 @@ export function TitleHub({
     setBotBusy(true);
     setError('');
     try { await onQuickPlayBot(); }
-    catch (err) { setError(err instanceof Error ? err.message : 'تعذّر تجهيز مباراة نشمي.'); }
+    catch (err) { setError(err instanceof Error ? err.message : 'تعذّر تجهيز مباراة يزن.'); }
     finally { setBotBusy(false); }
   }
 
@@ -88,9 +88,9 @@ export function TitleHub({
         <ShowMark />
         <div className="show-nav__tools">
           <a href="https://say-it-u1w6.onrender.com/" className="show-account" aria-label="العودة إلى منصة يمكن هاي" style={{textDecoration:'none',background:'#ffdf55',color:'#25152d',whiteSpace:'nowrap'}}><ArrowLeft size={16}/> <span>كل الألعاب</span></a>
-          <button type="button" className="show-nashmi-btn" aria-label="اسأل نشمي — البوت الأردني" onClick={onOpenBot}>
+          <button type="button" className="show-nashmi-btn" aria-label="اسأل يزن — البوت الأردني" onClick={onOpenBot}>
             <NashmiMascot size={26} />
-            <span className="hidden sm:inline">اسأل نشمي</span>
+            <span className="hidden sm:inline">اسأل يزن</span>
           </button>
           <button type="button" className="show-icon-button" aria-pressed={soundEnabled} aria-label={soundEnabled ? 'كتم الصوت' : 'تفعيل الصوت الهادئ'} onClick={onToggleSound}>
             {soundEnabled ? <Volume2 /> : <VolumeX />}
@@ -112,12 +112,12 @@ export function TitleHub({
             <div className="show-hero__actions">
               <button type="button" className="show-button show-button--yellow" onClick={() => onStartSetup()}><Play fill="currentColor" size={21} /> يلا نبلّش!</button>
               <button type="button" className="show-button show-button--cream" disabled={busy || botBusy} onClick={quickPlay}><Zap size={20} />{busy ? 'لحظة…' : 'تحدي سريع'}</button>
-              <button type="button" className="show-button show-button--pink" disabled={busy || botBusy} onClick={quickPlayBot}><Swords size={20} />{botBusy ? 'نشمي عم يجهز…' : 'تحدّى نشمي (بوت)'}</button>
+              <button type="button" className="show-button show-button--pink" disabled={busy || botBusy} onClick={quickPlayBot}><Swords size={20} />{botBusy ? 'يزن عم يجهز…' : 'تحدّى يزن (بوت)'}</button>
             </div>
             <div className="show-hero__links">
               <button type="button" onClick={onOpenLessonStudio}><BookOpen size={19} /> تحدي الدرس الذكي</button>
               <button type="button" onClick={() => { setError(''); joinDialog.current?.showModal(); }}><DoorOpen size={19} /> انضم للمباراة</button>
-              <button type="button" onClick={onOpenBot}><NashmiMascot size={22} /> اسأل نشمي عن القوانين</button>
+              <button type="button" onClick={onOpenBot}><NashmiMascot size={22} /> اسأل يزن عن القوانين</button>
             </div>
             {error && !joinDialog.current?.open && <p className="show-error" role="alert">{error}</p>}
           </div>

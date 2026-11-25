@@ -1242,7 +1242,7 @@ export function createAppAndHub(db: Database.Database) {
     res.json({ session: result.view });
   });
 
-  // ================= JORDANIAN BOT ADVISOR («نشمي») =================
+  // ================= JORDANIAN BOT ADVISOR («يزن») =================
 
   app.post('/api/bot/guide', (req, res) => {
     const body = req.body as {
@@ -1252,7 +1252,7 @@ export function createAppAndHub(db: Database.Database) {
     };
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     if (!message || message.length > 1000) {
-      res.status(400).json({ error: 'اكتب سؤالك لنشمي (بحد أقصى 1000 حرف).' });
+      res.status(400).json({ error: 'اكتب سؤالك ليزن (بحد أقصى 1000 حرف).' });
       return;
     }
     const screen = typeof body.screen === 'string' ? body.screen.slice(0, 40) : undefined;
@@ -1278,7 +1278,7 @@ export function createAppAndHub(db: Database.Database) {
     };
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     if (!message || message.length > 1200) {
-      res.status(400).json({ error: 'اكتب رسالتك لنشمي (بحد أقصى 1200 حرف).' });
+      res.status(400).json({ error: 'اكتب رسالتك ليزن (بحد أقصى 1200 حرف).' });
       return;
     }
     const screen = typeof body.screen === 'string' ? body.screen.slice(0, 40) : undefined;

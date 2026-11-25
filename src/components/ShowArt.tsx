@@ -243,7 +243,7 @@ export function NashmiMascot({
 }
 
 const HOST_MOOD_BADGES: Record<NashmiHostMood, string> = {
-  idle: 'نشمي مباشر',
+  idle: 'يزن مباشر',
   hyped: 'حماس عالي!',
   thinking: 'بيترقّب…',
   tense: 'آخر 5 ثوانٍ!',
@@ -326,8 +326,8 @@ export function NashmiStageHost({
       : null;
 
   const speakerLabel = session.settings.botOpponent?.enabled
-    ? session.settings.botOpponent.personaName || 'نشمي'
-    : 'نشمي · المذيع';
+    ? session.settings.botOpponent.personaName || 'يزن'
+    : 'يزن · المذيع';
 
   return (
     <aside
@@ -352,13 +352,13 @@ export function NashmiStageHost({
           type="button"
           className="nashmi-stage-host__avatar"
           onClick={onOpenBot}
-          aria-label="اسأل نشمي المذيع الأردني"
+          aria-label="اسأل يزن المذيع الأردني"
         >
           <NashmiMascot size={62} mood={mood} />
           <span className="nashmi-stage-host__badge">{HOST_MOOD_BADGES[mood]}</span>
         </button>
       ) : (
-        <div className="nashmi-stage-host__avatar" aria-label={`نشمي المذيع — ${HOST_MOOD_BADGES[mood]}`}>
+        <div className="nashmi-stage-host__avatar" aria-label={`يزن المذيع — ${HOST_MOOD_BADGES[mood]}`}>
           <NashmiMascot size={62} mood={mood} />
           <span className="nashmi-stage-host__badge">{HOST_MOOD_BADGES[mood]}</span>
         </div>

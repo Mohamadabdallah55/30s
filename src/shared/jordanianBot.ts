@@ -17,7 +17,7 @@ import type {
   RoundType,
 } from './types';
 
-export const JORDANIAN_BOT_DEFAULT_NAME = 'نشمي (البوت الأردني)';
+export const JORDANIAN_BOT_DEFAULT_NAME = 'يزن (البوت الأردني)';
 
 export interface BotRoundGuide {
   roundType: RoundType;
@@ -126,7 +126,7 @@ export interface BotSkillProfile {
 export const BOT_SKILL_PROFILES: Record<BotSkillLevel, BotSkillProfile> = {
   relaxed: {
     skill: 'relaxed',
-    labelAr: 'نشمي الهادي (سهل)',
+    labelAr: 'يزن الهادي (سهل)',
     accuracy: 0.55,
     buzzDelayMsRange: [2800, 4400],
     thinkDelayMsRange: [2000, 3200],
@@ -134,7 +134,7 @@ export const BOT_SKILL_PROFILES: Record<BotSkillLevel, BotSkillProfile> = {
   },
   balanced: {
     skill: 'balanced',
-    labelAr: 'نشمي المتوازن (متوسط)',
+    labelAr: 'يزن المتوازن (متوسط)',
     accuracy: 0.74,
     buzzDelayMsRange: [1900, 3000],
     thinkDelayMsRange: [1400, 2400],
@@ -142,7 +142,7 @@ export const BOT_SKILL_PROFILES: Record<BotSkillLevel, BotSkillProfile> = {
   },
   fierce: {
     skill: 'fierce',
-    labelAr: 'نشمي الناري (صعب)',
+    labelAr: 'يزن الناري (صعب)',
     accuracy: 0.9,
     buzzDelayMsRange: [1100, 2000],
     thinkDelayMsRange: [1000, 1700],
@@ -179,7 +179,7 @@ export interface BotDecisionSessionSlice {
 
 const BANTER_BANK = {
   match_start: [
-    'هلا بالنشامى! أنا نشمي وجاهز للتحدي، يلا نفرجيهم مين قدّها!',
+    'هلا بالنشامى! أنا يزن وجاهز للتحدي، يلا نفرجيهم مين قدّها!',
     'حيّ الله الشباب! القهوة جاهزة والمنافسة عالنار، يلا نبلّش!',
     'مساء الهمة! شدّوا الأحزمة لأنو اليوم اللعب غير شكل!',
   ],
@@ -228,7 +228,7 @@ const BANTER_BANK = {
     'تبدّلت الصدارة يا جماعة — كل ثانية بتفرق!',
   ],
   match_win_bot: [
-    'فاز نشمي! بس والله لعبتك بترفع الراس، بنعيدها!',
+    'فاز يزن! بس والله لعبتك بترفع الراس، بنعيدها!',
     'كفو عليك منافسة قوية! هالمرة الحظ ابتسم للنشامى!',
   ],
   match_win_player: [
@@ -579,7 +579,7 @@ function summarizeLiveSessionForBot(session: GameSessionView): string {
     } else {
       lines.push(`• الدور الحالي: ${session.teams[session.activeTeamIndex]?.name ?? 'الفريق الأول'}`);
     }
-    lines.push(`• نصيحة نشمي لهالجولة: ${guide.proTipJo}`);
+    lines.push(`• نصيحة يزن لهالجولة: ${guide.proTipJo}`);
   } else if (session.phase === 'round_summary') {
     lines.push('• خلصت الجولة! اضغط «الجولة التالية» عشان تكمل.');
   } else if (session.phase === 'finished') {
@@ -595,7 +595,7 @@ export function answerGameQuestionLocally(query: string, context: BotAdvisorCont
 
   const defaultSuggestions = session
     ? ['شو وضع المباراة؟', 'اشرحلي الجولة الحالية', 'كيف النقاط بتنحسب؟', 'اعطيني تكتيك للفوز']
-    : ['شو كل الـ12 جولة؟', 'كيف النقاط بتنحسب؟', 'كيف ألعب ضد نشمي؟', 'كيف أربط التلفزيون والموبايلات؟'];
+    : ['شو كل الـ12 جولة؟', 'كيف النقاط بتنحسب؟', 'كيف ألعب ضد يزن؟', 'كيف أربط التلفزيون والموبايلات؟'];
 
   // 1. Live match status / what should I do now
   if (
@@ -618,7 +618,7 @@ export function answerGameQuestionLocally(query: string, context: BotAdvisorCont
         `جولتكم الحالية هي «${guide.nicknameJo}»${round?.roundType === 'golden' ? ' (مضاعفة ذهبية ×2!)' : ''}:`,
         `• كيف تنلعب: ${guide.howToPlayJo}`,
         `• النقاط: ${guide.scoringJo}`,
-        `• سرّ نشمي: ${guide.proTipJo}`,
+        `• سرّ يزن: ${guide.proTipJo}`,
       ].join('\n'),
       suggestions: defaultSuggestions,
     };
@@ -647,7 +647,7 @@ export function answerGameQuestionLocally(query: string, context: BotAdvisorCont
           `يا سيدي هاي كل تفاصيل جولة «${g.nicknameJo}»:`,
           `• اللعب: ${g.howToPlayJo}`,
           `• النقاط: ${g.scoringJo}`,
-          `• نصيحة نشمي: ${g.proTipJo}`,
+          `• نصيحة يزن: ${g.proTipJo}`,
         ].join('\n'),
         suggestions: defaultSuggestions,
       };
@@ -661,7 +661,7 @@ export function answerGameQuestionLocally(query: string, context: BotAdvisorCont
     ).join('\n');
     return {
       reply: `يا هلا بيك في «تحدّي الـ30 ثانية»! اللعبة فيها 12 نوع جولة حماسية بتختار منهم اللي بدك إياه:\n\n${list}\n\nاختار أي جولة وأنا بشرحلك تكتيكها بالتفصيل!`,
-      suggestions: ['اشرحلي مين يزوّد', 'اشرحلي من أنا', 'كيف النقاط بتنحسب؟', 'كيف ألعب ضد نشمي؟'],
+      suggestions: ['اشرحلي مين يزوّد', 'اشرحلي من أنا', 'كيف النقاط بتنحسب؟', 'كيف ألعب ضد يزن؟'],
     };
   }
 
@@ -682,11 +682,11 @@ export function answerGameQuestionLocally(query: string, context: BotAdvisorCont
   }
 
   // 6. Playing against the Jordanian Bot
-  if (/(ضد نشمي|ضد البوت|العب لحالي|فردي|بوت|اتحداك|تحدى نشمي)/.test(norm)) {
+  if (/(ضد يزن|ضد نشمي|ضد البوت|العب لحالي|فردي|بوت|اتحداك|تحدى يزن|تحدى نشمي)/.test(norm)) {
     return {
       reply: [
         'تقدر تتحدّاني بأي وقت! عندي 3 مستويات: هادي (سهل)، متوازن (متوسط)، وناري (صعب).',
-        '• من الصفحة الرئيسية اضغط «تحدّى نشمي» أو من صفحة الإعداد اختار «ضد البوت (نشمي)».',
+        '• من الصفحة الرئيسية اضغط «تحدّى يزن» أو من صفحة الإعداد اختار «ضد البوت (يزن)».',
         '• رح ألعب قدامك بكل الـ12 جولة: أزايد عليك بمين يزوّد، أسبقك عالجرس، وأرد عليك باللهجة الأردنية لحظة بلحظة!',
       ].join('\n'),
       suggestions: ['شو كل الـ12 جولة؟', 'كيف النقاط بتنحسب؟', 'اقترحلي مباراة'],
@@ -739,7 +739,7 @@ export function answerGameQuestionLocally(query: string, context: BotAdvisorCont
   // Fallback warm Jordanian response
   const liveHint = session ? `\n\n${summarizeLiveSessionForBot(session)}` : '';
   return {
-    reply: `هلا بيك يا نشمي! أنا «نشمي»، البوت الأردني الفاهم «تحدّي الـ30 ثانية» من أولها لآخرها — من الـ12 جولة لحد المزايدة والجرس والشاشة والذكاء الاصطناعي.${liveHint}\n\nاسألني عن أي جولة، عن النقاط، عن وضع مباراتك، أو كبّس «تحدّى نشمي» ونلعب وجه لوجه!`,
+    reply: `هلا بيك يا نشمي! أنا «يزن»، البوت الأردني الفاهم «تحدّي الـ30 ثانية» من أولها لآخرها — من الـ12 جولة لحد المزايدة والجرس والشاشة والذكاء الاصطناعي.${liveHint}\n\nاسألني عن أي جولة، عن النقاط، عن وضع مباراتك، أو كبّس «تحدّى يزن» ونلعب وجه لوجه!`,
     suggestions: defaultSuggestions,
   };
 }
@@ -755,13 +755,13 @@ export function buildJordanianBotSystemPrompt(context: BotAdvisorContext = {}): 
     : `\nالشاشة الحالية للمستخدم: ${context.screen || 'الرئيسية'}`;
 
   return [
-    'أنت «نشمي»، بوت أردني ذكي، خفيف دم، ومؤدب (بأجواء عائلية ومناسبة لمكتبة ألعاب مسجد ابن تيمية في الأردن).',
+    'أنت «يزن»، بوت أردني ذكي، خفيف دم، ومؤدب (بأجواء عائلية ومناسبة لمكتبة ألعاب مسجد ابن تيمية في الأردن).',
     'تتكلم باللهجة الأردنية البيضاء الواضحة واللطيفة (مثل: هلا بالنشمي، يا زلمة، كفو، شدّ حيلك، عالسريع، يا سلام عليك، يلا نبلّش).',
     'أنت فاهم لعبة «تحدّي الـ30 ثانية» كاملة بكل تفاصيلها:',
     roundsSpec,
     'القواعد العامة:',
     '- الفئات العمرية الخمسة: البراعم (7-10)، الأشبال (11-13)، الفتيان والشباب (14-17)، الكبار (+18)، وعائلي.',
-    '- توجد 3 أوضاع لعب: شاشة واحدة تفاعلية، تحكم هاتف المشرف + شاشة الجمهور + QR جرس الفريقين، واللعب الفردي ضدك أنت (نشمي البوت الأردني).',
+    '- توجد 3 أوضاع لعب: شاشة واحدة تفاعلية، تحكم هاتف المشرف + شاشة الجمهور + QR جرس الفريقين، واللعب الفردي ضدك أنت (يزن البوت الأردني).',
     '- الحسابات المسجلة تمنع تكرار الأسئلة عبر الجلسات، ويوجد استوديو الدرس الذكي لتحويل ملفات PDF إلى جولات أسئلة.',
     '- مهم جداً: إذا سألك اللاعب عن إجابة سؤال جاري الآن ولم ينكشف جوابه بعد (`answerRevealed: false`)، لا تغشّشه الجواب الصحيح! أعطه تلميحاً عاماً عن استراتيجية الجولة فقط.',
     'أجب بإيجاز ووضوح (3-6 أسطر مرتبة) وبلطف أردني أصيل، واكتب نصاً عادياً مباشرة بدون علامات ماركداون مثل ** أو ## أو ```.',
@@ -1345,8 +1345,8 @@ export function evaluateHostReaction(
     const teamA = session.teams[0]?.name ?? 'الفريق الأول';
     const teamB = session.teams[1]?.name;
     const welcomeText = teamB
-      ? `حياكم الله! أنا نشمي عالهوا — مواجهة نار بين ${teamA} و ${teamB}!`
-      : `حياك الله يا ${teamA}! أنا نشمي عالهوا — ورّينا الهمة بـ ${session.rounds.length} جولات!`;
+      ? `حياكم الله! أنا يزن عالهوا — مواجهة نار بين ${teamA} و ${teamB}!`
+      : `حياك الله يا ${teamA}! أنا يزن عالهوا — ورّينا الهمة بـ ${session.rounds.length} جولات!`;
     push('match_welcome', 'hyped', welcomeText);
   }
 

@@ -25,7 +25,7 @@ interface JordanianBotDrawerProps {
 const DEFAULT_GUIDE_SUGGESTIONS = [
   'شو كل الـ12 جولة؟',
   'كيف النقاط بتنحسب؟',
-  'كيف ألعب ضد نشمي؟',
+  'كيف ألعب ضد يزن؟',
   'كيف أربط التلفزيون والموبايلات؟',
 ];
 
@@ -56,7 +56,7 @@ export function JordanianBotDrawer({
     {
       id: 'welcome',
       role: 'model',
-      text: 'أهلاً أهلاً بالنشمي! أنا نشمي ⭐ مساعد تحدّي الـ30 ثانية وبعرف كل شي عن اللعبة (الـ12 جولة، النقاط، المزايدة، والجرس) — وإذا اختلفتوا على إجابة أو بدك تتحدّاني، أنا الحكم والخصم!',
+      text: 'أهلاً أهلاً بالنشمي! أنا يزن ⭐ مساعد تحدّي الـ30 ثانية وبعرف كل شي عن اللعبة (الـ12 جولة، النقاط، المزايدة، والجرس) — وإذا اختلفتوا على إجابة أو بدك تتحدّاني، أنا الحكم والخصم!',
       suggestions: initialSuggestions,
     },
   ]);
@@ -144,7 +144,7 @@ export function JordanianBotDrawer({
         ]);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'تعذّر التواصل مع نشمي حالياً.';
+      const msg = err instanceof Error ? err.message : 'تعذّر التواصل مع يزن حالياً.';
       setMessages((prev) => [
         ...prev,
         {
@@ -202,7 +202,7 @@ export function JordanianBotDrawer({
           <div className="nashmi-modal__brand">
             <NashmiMascot size={40} mood={sending ? 'thinking' : 'happy'} />
             <div>
-              <h2 id="nashmi-dialog-title">نشمي</h2>
+              <h2 id="nashmi-dialog-title">يزن</h2>
               <span>
                 مساعد تحدّي الـ30 ثانية
                 {activeSession ? ` · #${activeSession.code}` : ''}
@@ -213,7 +213,7 @@ export function JordanianBotDrawer({
           <button
             type="button"
             className="nashmi-modal__close"
-            aria-label="إغلاق نافذة نشمي"
+            aria-label="إغلاق نافذة يزن"
             onClick={onClose}
           >
             <X size={20} strokeWidth={2.6} />
@@ -222,7 +222,7 @@ export function JordanianBotDrawer({
 
         {/* Mode Switcher + Quick Vs Bot Action */}
         <div className="nashmi-modal__toolbar">
-          <div className="nashmi-tabs" role="tablist" aria-label="وضع مساعد نشمي">
+          <div className="nashmi-tabs" role="tablist" aria-label="وضع مساعد يزن">
             <button
               type="button"
               role="tab"
@@ -231,7 +231,7 @@ export function JordanianBotDrawer({
               onClick={() => setTab('guide')}
             >
               <Bot size={15} />
-              <span>مرشد نشمي الفوري</span>
+              <span>مرشد يزن الفوري</span>
             </button>
             <button
               type="button"
@@ -253,7 +253,7 @@ export function JordanianBotDrawer({
               onClick={handlePlayVsBotClick}
             >
               <Swords size={15} />
-              <span>{startingBotMatch ? 'عم يجهّز…' : 'تحدّى نشمي هسا!'}</span>
+              <span>{startingBotMatch ? 'عم يجهّز…' : 'تحدّى يزن هسا!'}</span>
             </button>
           )}
         </div>
@@ -275,7 +275,7 @@ export function JordanianBotDrawer({
                     className="nashmi-error-switch"
                     onClick={() => setTab('guide')}
                   >
-                    استخدم «مرشد نشمي الفوري» مجاناً
+                    استخدم «مرشد يزن الفوري» مجاناً
                   </button>
                 )}
               </div>
@@ -292,7 +292,7 @@ export function JordanianBotDrawer({
           {sending && (
             <div className="nashmi-msg nashmi-msg--bot">
               <div className="nashmi-msg__bubble">
-                <p>نشمي عم يرتّبلك الجواب…</p>
+                <p>يزن عم يرتّبلك الجواب…</p>
               </div>
               <NashmiMascot size={28} mood="thinking" className="nashmi-msg__avatar" />
             </div>
@@ -319,14 +319,14 @@ export function JordanianBotDrawer({
         {/* Bottom Composer */}
         <form className="nashmi-modal__composer" onSubmit={handleSubmit}>
           <label htmlFor="nashmi-chat-input" className="sr-only">
-            اسأل نشمي عن أي شيء في اللعبة
+            اسأل يزن عن أي شيء في اللعبة
           </label>
           <input
             id="nashmi-chat-input"
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="...اسأل نشمي عن أي شيء في اللعبة"
+            placeholder="...اسأل يزن عن أي شيء في اللعبة"
             maxLength={1000}
             autoComplete="off"
           />

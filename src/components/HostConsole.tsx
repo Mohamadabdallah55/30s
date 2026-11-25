@@ -241,7 +241,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
                 onClick={onOpenBot}
                 className="px-3 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 border border-white/10 text-xs font-bold inline-flex items-center gap-1.5"
               >
-                <span>نشمي</span>
+                <span>يزن</span>
               </button>
             )}
             <button

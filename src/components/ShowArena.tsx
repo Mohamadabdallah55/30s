@@ -55,9 +55,9 @@ function PlayerInputs({ session, busy, canControl, onAnswer, onAction, onBuzz }:
         <span>
           {session.bidState
             ? session.bidState.phase === 'bidding'
-              ? 'دور نشمي بالمزايدة… عم يقرّر!'
-              : 'دور نشمي بتنفيذ التحدي… راقب إجاباته!'
-            : 'دور نشمي… عم بفكّر بالإجابة!'}
+              ? 'دور يزن بالمزايدة… عم يقرّر!'
+              : 'دور يزن بتنفيذ التحدي… راقب إجاباته!'
+            : 'دور يزن… عم بفكّر بالإجابة!'}
         </span>
       </div>
     );
@@ -92,7 +92,7 @@ function PlayerInputs({ session, busy, canControl, onAnswer, onAction, onBuzz }:
   if (type === 'buzzer' && session.buzzedTeamIndex === null) {
     const buzzTeams = botCfg?.enabled ? session.teams.filter((t) => t.index !== botIdx) : session.teams;
     return <div className="show-arena__actions">
-      {buzzTeams.map((team) => <button key={team.index} type="button" className="show-button show-button--pink" disabled={busy || session.failedBuzzTeams.includes(team.index)} onClick={() => onBuzz(team.index)}><Bell /> {botCfg?.enabled ? `جرس ${team.name} (اضغط قبل نشمي!)` : team.name}</button>)}
+      {buzzTeams.map((team) => <button key={team.index} type="button" className="show-button show-button--pink" disabled={busy || session.failedBuzzTeams.includes(team.index)} onClick={() => onBuzz(team.index)}><Bell /> {botCfg?.enabled ? `جرس ${team.name} (اضغط قبل يزن!)` : team.name}</button>)}
     </div>;
   }
 
@@ -164,9 +164,9 @@ export function ShowArena(props: ShowArenaProps) {
   return <div className="show-stage show-arena" dir="rtl" data-phase={session.phase}>
     <header className="show-stage__head"><ShowMark /><span>{props.connected ? 'مباراة مباشرة' : 'عم نرجّع الاتصال…'} <bdi>#{session.code}</bdi></span>
       {props.onOpenBot && (
-        <button type="button" className="show-nashmi-btn" aria-label="اسأل نشمي — البوت الأردني" onClick={props.onOpenBot}>
+        <button type="button" className="show-nashmi-btn" aria-label="اسأل يزن — البوت الأردني" onClick={props.onOpenBot}>
           <NashmiMascot size={24} />
-          <span className="hidden sm:inline">نشمي</span>
+          <span className="hidden sm:inline">يزن</span>
         </button>
       )}
       <button type="button" className="show-stage__sound" aria-pressed={props.audio} aria-label="صوت اللعبة" onClick={props.onSound}>{props.audio ? <Volume2 /> : <VolumeX />}</button>

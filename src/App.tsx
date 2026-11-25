@@ -261,7 +261,7 @@ export default function App() {
     const { session } = await apiFetch<{ session: GameSessionView }>('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({
-        title: 'تحدّي نشمي (البوت الأردني)',
+        title: 'تحدّي يزن (البوت الأردني)',
         bankId,
         teams: [
           {

@@ -291,7 +291,7 @@ export function MatchSetup({
       const res = await apiFetch<{ session: GameSessionView }>('/api/sessions', {
         method: 'POST',
         body: JSON.stringify({
-          title: isVsBot ? 'تحدّي نشمي (البوت الأردني)' : 'تحدي الـ30 ثانية — مسجد ابن تيمية',
+          title: isVsBot ? 'تحدّي يزن (البوت الأردني)' : 'تحدي الـ30 ثانية — مسجد ابن تيمية',
           bankId,
           lessonId: initialLessonId ?? null,
           ageGroup,
@@ -342,9 +342,9 @@ export function MatchSetup({
           <button type="button" className="show-button show-button--cream" onClick={onBack}><ArrowRight size={18} /> عالصفحة الرئيسية</button>
           <div className="flex items-center gap-2.5">
             {onOpenBot && (
-              <button type="button" className="show-nashmi-btn" onClick={onOpenBot} aria-label="اسأل نشمي — البوت الأردني">
+              <button type="button" className="show-nashmi-btn" onClick={onOpenBot} aria-label="اسأل يزن — البوت الأردني">
                 <NashmiMascot size={24} />
-                <span className="hidden sm:inline">اسأل نشمي</span>
+                <span className="hidden sm:inline">اسأل يزن</span>
               </button>
             )}
             <ShowMark />
@@ -443,7 +443,7 @@ export function MatchSetup({
                       opponentMode === 'bot' ? 'bg-amber-400 text-slate-950' : 'text-slate-300'
                     }`}
                   >
-                    ضد البوت (نشمي)
+                    ضد البوت (يزن)
                   </button>
                 </div>
               </div>
@@ -522,7 +522,7 @@ export function MatchSetup({
                     </div>
                     <div>
                       <label htmlFor="bot-skill-select" className="block text-[11px] font-bold text-slate-300 mb-1">
-                        مستوى ذكاء وسرعة نشمي:
+                        مستوى ذكاء وسرعة يزن:
                       </label>
                       <select
                         id="bot-skill-select"
@@ -931,7 +931,7 @@ export function MatchSetup({
                 </div>
               ) : (
                 <div className="rounded-xl bg-[#09143A] border border-amber-400/35 px-3.5 py-2.5 text-xs font-bold text-amber-200">
-                  مع نشمي: تبدأ المباراة مباشرة في الشاشة التفاعلية دون الحاجة لمشرف أو تسجيل دخول!
+                  مع يزن: تبدأ المباراة مباشرة في الشاشة التفاعلية دون الحاجة لمشرف أو تسجيل دخول!
                 </div>
               )}
 

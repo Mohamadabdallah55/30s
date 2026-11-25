@@ -507,7 +507,7 @@ export function GameArena({
                 onClick={onOpenBot}
                 className="h-9 px-3 rounded-xl bg-violet-600/80 hover:bg-violet-500 border border-violet-300/30 text-white font-bold whitespace-nowrap"
               >
-                نشمي
+                يزن
               </button>
             )}
             {onOpenHostPanel && (
