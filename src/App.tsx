@@ -206,7 +206,7 @@ export default function App() {
     setActiveSession(session);
     setSessionCode(session.code);
     if (launchMode === 'host_and_projector') {
-      navigateTo('host');
+      navigateTo('projector');
     } else {
       navigateTo('arena');
     }
@@ -365,7 +365,7 @@ export default function App() {
       )}
 
       {screen === 'projector' && sessionCode && (
-        <AudienceProjector code={sessionCode} onExit={goBackOneStep} />
+        <AudienceProjector code={sessionCode} onExit={goBackOneStep} onOpenHost={()=>navigateTo('host')} />
       )}
 
       {screen === 'buzzer' && sessionCode && (
@@ -386,7 +386,7 @@ export default function App() {
           onLaunchSession={(session) => {
             setActiveSession(session);
             setSessionCode(session.code);
-            navigateTo('host');
+            navigateTo('projector');
           }}
           onOpenHostPanel={(session) => {
             setActiveSession(session);

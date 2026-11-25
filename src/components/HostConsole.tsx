@@ -129,7 +129,7 @@ export function HostConsole({ code, onBack, onOpenProjector, onOpenAuth, onOpenB
     URL.revokeObjectURL(url);
   };
 
-  if (session?.challengeV2) return <ChallengeV2Surface session={session} role={session.hostSecret?'host':'audience'} onUpdate={setSession} onExit={onBack}/>;
+  if (session?.challengeV2 && session.hostSecret) return <ChallengeV2Surface session={session} role="host" onUpdate={setSession} onExit={onBack}/>;
 
   if (error && !session) {
     return (

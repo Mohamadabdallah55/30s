@@ -5,10 +5,11 @@ import { apiFetch } from '../utils/api';
 import { ShowMark } from './ShowArt';
 import { soundFx } from '../utils/sound';
 import { SessionQrBadge } from './BrandEmblem';
+import { AudienceControlQr } from './AudienceControlQr';
 
-export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit}: {
+export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit, onOpenHost}: {
   session:GameSessionView; role:'host'|'audience'|'team'; teamIndex?:number;
-  onUpdate?:(s:GameSessionView)=>void; onExit:()=>void;
+  onUpdate?:(s:GameSessionView)=>void; onExit:()=>void; onOpenHost?:()=>void;
 }) {
   const v=session.challengeV2!;
   const host=role==='host'&&Boolean(session.hostSecret);
@@ -57,23 +58,27 @@ export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit
   const eligibleTeams=session.teams.filter(t=>v.section==='identity'?!v.guessed.includes(t.index):v.team===t.index);
   const terminal=['finished','cancelled'].includes(v.stage);
   const leader=session.teams[0].points===session.teams[1].points?null:session.teams[0].points>session.teams[1].points?0:1;
-  return <div className="show-stage v2-live-stage" dir="rtl" data-phase={session.phase} data-role={role}>
+  return <div className={`show-stage v2-live-stage ${role==='audience'?'audience-wide-stage':''}`} dir="rtl" data-phase={session.phase} data-role={role}>
     <header className="show-stage__head"><ShowMark/><span>تحدي الثلاثين · <bdi>#{session.code}</bdi></span><button type="button" onClick={onExit} className="show-button show-button--cream">رجوع</button></header>
+    {role==='audience'&&<div className="audience-top-score" aria-label="نتيجة المباراة">{session.teams.map(t=><div key={t.index} className="audience-top-team" data-active={v.team===t.index} style={{borderColor:t.color}}><span>{t.name}</span><strong dir="ltr">{t.points}</strong></div>)}<div className="audience-top-center"><span>{v.sectionTitle}</span>{!terminal&&(v.deadline!==null||v.paused)&&<strong className={remaining<=5&&isLive?'text-[#FF68A0]':'text-[#FFE45A]'} aria-label="الوقت المتبقي" dir="ltr">{remaining}</strong>}</div></div>}
     <main className="v2-live-layout">
       <aside className="v2-live-rail" aria-label="النتائج والوقت">
-        <div className="v2-live-score">{session.teams.map(t=><div key={t.index} className="v2-live-team" data-active={v.team===t.index} style={{borderColor:t.color}}><span>{t.name}</span><strong dir="ltr">{t.points}</strong></div>)}</div>
+        {role!=='audience'&&<div className="v2-live-score">{session.teams.map(t=><div key={t.index} className="v2-live-team" data-active={v.team===t.index} style={{borderColor:t.color}}><span>{t.name}</span><strong dir="ltr">{t.points}</strong></div>)}</div>}
         <section className="v2-live-status rounded-2xl border-2 border-[#FFE45A] bg-[#29183E] text-center text-white">
         <p className="text-[#42C9FF] font-bold">{role==='team'?`جهاز ${session.teams[teamIndex]?.name}`:host?'شاشة الحكم':'شاشة الجمهور'}</p>
         <h1 className="text-3xl font-black">{terminal?(v.stage==='cancelled'?'أُلغيت المباراة':leader===null?'تعادل!':`يا سلام! ${session.teams[leader].name} فازوا`):v.sectionTitle}</h1>
-        {!host&&<p>{v.rules}</p>}{host&&<details className="text-sm"><summary className="cursor-pointer">قانون الجولة</summary><p>{v.rules}</p></details>}
-        {!terminal&&<>{(v.deadline!==null||v.paused)&&<div className={`text-6xl font-black tabular-nums ${remaining<=5&&isLive?'text-[#FF68A0]':'text-[#FFE45A]'}`} aria-label="الوقت المتبقي">{remaining}</div>}
+        {!host&&role!=='audience'&&<p>{v.rules}</p>}{host&&<details className="text-sm"><summary className="cursor-pointer">قانون الجولة</summary><p>{v.rules}</p></details>}
+        {!terminal&&<>{role!=='audience'&&(v.deadline!==null||v.paused)&&<div className={`text-6xl font-black tabular-nums ${remaining<=5&&isLive?'text-[#FF68A0]':'text-[#FFE45A]'}`} aria-label="الوقت المتبقي">{remaining}</div>}
           <p>{v.paused?'الوقت متوقف':v.stage==='reading'?'اقرأ السؤال، وبعدين افتح التحدي':v.stage==='bidding'?`الدور بالمزايدة: ${session.teams[v.bidTurn].name}`:v.stage==='auction_ready'?`بانتظار جاهزية ${session.teams[v.bidder].name}`:v.team!==null?`الدور: ${session.teams[v.team].name}`:v.stage==='buzz_open'?'الجرس مفتوح!':v.stage==='judging'?'المقدم بحكّم الإجابة':v.stage==='result'?'انتهى التحدي':v.stage==='ready'?'الفريقان جاهزين؟':'يلا نشوف شطارتكم!'}</p></>}
         {v.notice&&<p role="status" className="text-[#FFE45A]">{v.notice}</p>}
         </section>
         <div className="v2-live-progress" aria-label="فقرات المباراة">{v.plan.map(item=><span key={item.section} data-current={v.section===item.section}>{item.title}</span>)}</div>
+        {role==='audience'&&!terminal&&<AudienceControlQr code={session.code} onOpenHost={onOpenHost}/>}
         {host&&<a target="_blank" rel="noopener noreferrer" href={`/?mode=projector&code=${encodeURIComponent(session.code)}`} className="show-button show-button--cream">عرض الجمهور (اختياري)</a>}
       </aside>
       <div className="v2-live-body">
+      {role==='audience'&&v.stage==='ready'&&<section className="audience-ready"><p>تحدي الثلاثين</p><h2>جاهزين للمواجهة؟</h2><div className="audience-ready-teams">{session.teams.map(t=><strong key={t.index} style={{borderColor:t.color}}>{t.name}</strong>)}</div><p>بانتظار بدء المباراة من الحكم</p></section>}
+      {role==='audience'&&terminal&&<section className="audience-ready"><p>النتيجة النهائية</p><h2>{v.stage==='cancelled'?'أُلغيت المباراة':leader===null?'تعادل!':session.teams[leader].name+' فازوا!'}</h2><div className="audience-ready-teams">{session.teams.map(t=><strong key={t.index} style={{borderColor:t.color}}>{t.name} · {t.points}</strong>)}</div></section>}
       {v.stage!=='ready'&&!terminal&&<section className="v2-live-question rounded-3xl bg-[#FFF9ED] text-[#29183E] text-center">
         <h2 className="text-2xl sm:text-4xl font-black">{session.currentQuestion?.prompt}</h2>
         {session.currentQuestion?.revealedClues?.map((clue,i)=><p className="rounded-2xl bg-[#874CF5]/15 p-3 text-xl" key={i}>التلميح {i+1}: {clue}</p>)}
