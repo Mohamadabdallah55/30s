@@ -1308,6 +1308,10 @@ export function createAppAndHub(db: Database.Database) {
       });
       res.json({ ...result, mode: 'gemini' });
     } catch (err) {
+      if (paidMode()) {
+        const local = getLocalJordanianGuideReply(db,hub,{message,screen,sessionCode});
+        res.json({...local,mode:'local'}); return;
+      }
       if (err instanceof BotGeminiError) {
         res.status(err.status).json({ error: err.message, code: err.code });
         return;
