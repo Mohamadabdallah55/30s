@@ -4,7 +4,7 @@ import { ArrowRight, Volume2, VolumeX } from 'lucide-react';
 import type { GameSessionView } from '../shared/types';
 import { apiFetch, useSessionSocket } from '../utils/api';
 import { soundFx } from '../utils/sound';
-import { NashmiStageHost, ShowMark } from './ShowArt';
+import { ShowMark } from './ShowArt';
 import { ChallengeDisplay, ScoreRibbon, ShowIntermission, useShowCountdown, useShowSound } from './ShowPresentation';
 import { AudienceControlQr } from './AudienceControlQr';
 
@@ -65,7 +65,7 @@ export function AudienceProjector({ code, onExit, onOpenHost }: { code: string; 
           if (!soundAllowed) soundFx.unlock();
           setSoundAllowed(!soundAllowed);
         }}>{soundAllowed ? <Volume2 /> : <VolumeX />}</button>}
-        {vs && <button className="show-stage__sound" type="button" aria-label="الرجوع" onClick={onExit}><ArrowRight /></button>}
+        <button className="show-stage__sound" type="button" aria-label="الرجوع" onClick={onExit}><ArrowRight /></button>
       </header>
       <main className="audience-wide-grid">
         <aside className="audience-wide-rail">
