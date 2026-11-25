@@ -39,3 +39,35 @@ test('budget survives closing and reopening a file-backed ledger', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('remote ledger health uses only the configured Supabase server key and fails closed', async () => {
+  const {checkBudgetStorage} = await import('./paidAi');
+  const previousUrl=process.env.YAZAN_SUPABASE_URL;
+  const previousKey=process.env.YAZAN_SUPABASE_SECRET_KEY;
+  const previousFetch=globalThis.fetch;
+  try {
+    process.env.YAZAN_SUPABASE_URL='https://example.supabase.co';
+    process.env.YAZAN_SUPABASE_SECRET_KEY='sb_secret_test_only';
+    let calls=0;
+    globalThis.fetch=async (input,init) => {
+      calls++;
+      assert.equal(String(input),'https://example.supabase.co/rest/v1/rpc/yazan_budget_health');
+      assert.equal(new Headers(init?.headers).get('apikey'),'sb_secret_test_only');
+      assert.equal(init?.redirect,'error');
+      return new Response('true',{status:200});
+    };
+    await checkBudgetStorage();
+    assert.equal(calls,1);
+    delete process.env.YAZAN_SUPABASE_SECRET_KEY;
+    await assert.rejects(checkBudgetStorage(),/storage unavailable/);
+    assert.equal(calls,1);
+    process.env.YAZAN_SUPABASE_SECRET_KEY='sb_secret_test_only';
+    globalThis.fetch=async()=>new Response('{}',{status:403});
+    await assert.rejects(checkBudgetStorage(),/storage rejected/);
+  } finally {
+    globalThis.fetch=previousFetch;
+    if(previousUrl===undefined)delete process.env.YAZAN_SUPABASE_URL;else process.env.YAZAN_SUPABASE_URL=previousUrl;
+    if(previousKey===undefined)delete process.env.YAZAN_SUPABASE_SECRET_KEY;else process.env.YAZAN_SUPABASE_SECRET_KEY=previousKey;
+  }
+});
