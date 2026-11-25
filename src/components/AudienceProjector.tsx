@@ -67,9 +67,9 @@ export function AudienceProjector({ code, onExit, onOpenHost }: { code: string; 
         }}>{soundAllowed ? <Volume2 /> : <VolumeX />}</button>}
         <button className="show-stage__sound" type="button" aria-label="الرجوع" onClick={onExit}><ArrowRight /></button>
       </header>
+      {!vs&&<div className="audience-top-legacy"><ScoreRibbon session={session}/></div>}
       <main className="audience-wide-grid">
         <aside className="audience-wide-rail">
-          {!vs && <ScoreRibbon session={session}/>}
           <AudienceControlQr code={code} onOpenHost={onOpenHost}/>
         </aside>
         <div className="audience-wide-content">
