@@ -108,3 +108,15 @@ test('rapid questions share one team clock and the opposing team starts with a f
   h.advanceTime(6000);h.answer(0);assert.equal(currentQuestionV2(h.state).id,'a2');assert.equal(h.state.core.deadline,deadline);
   h.advanceTime(24000);h.act('advance');h.act('begin');assert.equal(h.state.core.deadline!-h.now,30000);
 });
+
+
+test('spoken judging is host-only, atomic, idempotent and undoable in one step',()=>{
+  const h=harness([slot('buzzer',0)]);h.act('start');h.act('open_buzzer');h.act('buzz',{team:0});
+  const e=h.event('judge_spoken',{team:0,text:'أحمد',correct:true});
+  assert.throws(()=>h.run(e,false),/للمقدم/);
+  const before=h.state.revision,undos=h.state.undo.length;
+  h.run(e);assert.equal(h.state.revision,before+1);assert.equal(h.state.undo.length,undos+1);
+  assert.equal(h.state.core.attempts.length,1);assert.deepEqual(h.state.core.scores,[2,0]);
+  h.run(e);assert.equal(h.state.revision,before+1);
+  h.act('undo');assert.equal(h.state.core.attempts.length,0);assert.deepEqual(h.state.core.scores,[0,0]);
+});
