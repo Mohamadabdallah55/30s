@@ -42,10 +42,10 @@ export interface StateV2 {
 }
 export type ActionV2 = 'start' | 'advance' | 'begin' | 'open_buzzer' | 'buzz' | 'submit' | 'mark_correct' | 'mark_wrong' |
   'skip' | 'raise' | 'challenge' | 'next_clue' | 'pause' | 'resume' | 'undo' | 'object' | 'resolve_objection' |
-  'extra_time' | 'swap' | 'cancel' | 'cancel_attempt';
+  'extra_time' | 'swap' | 'cancel' | 'cancel_attempt' | 'judge_spoken';
 export interface EventV2 {
   id: string; revision: number; turnId: string; questionInstanceId: string; action: ActionV2;
-  team?: number; text?: string; value?: number; attemptId?: string; objectionId?: string;
+  team?: number; text?: string; value?: number; attemptId?: string; objectionId?: string; correct?: boolean;
 }
 export interface ViewV2 {
   revision: number; stage: StageV2; section: SectionV2; sectionTitle: string; rules: string;
