@@ -66,7 +66,7 @@ export function prepareMatchV2(db: Database.Database, filters: Omit<SelectionReq
   const shared = (section: SectionV2, n: number, points: number, predicate: (q: QuestionRecord) => boolean, source = pool) => {
     for (let i = 0; i < n; i++) {
       const q = source.find(q => available(q) && predicate(q) && (!cards || ['buzzer','tiebreak'].includes(section) || source.some(p=>available(p)&&p.id!==q.id&&(!q.conceptId||p.conceptId!==q.conceptId)&&pairSignature(p)===pairSignature(q)&&predicate(p))));
-      if (!q) throw new Error(`الأسئلة المعتمدة غير كافية لفقرة ${section}. لا يتم استبدال النوع أو تكرار الأسئلة تلقائيًا.`);
+      if (!q) throw new Error(`لا توجد أسئلة معتمدة كافية لفقرة ${section}. لا يتم استبدال النوع أو تكرار الأسئلة تلقائيًا.`);
       slot(section, i, null, points, [take(q)]);
     }
   };
