@@ -60,14 +60,15 @@ export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit
   const leader=session.teams[0].points===session.teams[1].points?null:session.teams[0].points>session.teams[1].points?0:1;
   return <div className={`show-stage v2-live-stage ${role==='audience'?'audience-wide-stage':''}`} dir="rtl" data-phase={session.phase} data-role={role}>
     <header className="show-stage__head"><ShowMark/><span>تحدي الثلاثين · <bdi>#{session.code}</bdi></span><button type="button" onClick={onExit} className="show-button show-button--cream">رجوع</button></header>
+    {role==='audience'&&<div className="audience-top-score" aria-label="نتيجة المباراة">{session.teams.map(t=><div key={t.index} className="audience-top-team" data-active={v.team===t.index} style={{borderColor:t.color}}><span>{t.name}</span><strong dir="ltr">{t.points}</strong></div>)}<div className="audience-top-center"><span>{v.sectionTitle}</span>{!terminal&&(v.deadline!==null||v.paused)&&<strong className={remaining<=5&&isLive?'text-[#FF68A0]':'text-[#FFE45A]'} aria-label="الوقت المتبقي" dir="ltr">{remaining}</strong>}</div></div>}
     <main className="v2-live-layout">
       <aside className="v2-live-rail" aria-label="النتائج والوقت">
-        <div className="v2-live-score">{session.teams.map(t=><div key={t.index} className="v2-live-team" data-active={v.team===t.index} style={{borderColor:t.color}}><span>{t.name}</span><strong dir="ltr">{t.points}</strong></div>)}</div>
+        {role!=='audience'&&<div className="v2-live-score">{session.teams.map(t=><div key={t.index} className="v2-live-team" data-active={v.team===t.index} style={{borderColor:t.color}}><span>{t.name}</span><strong dir="ltr">{t.points}</strong></div>)}</div>}
         <section className="v2-live-status rounded-2xl border-2 border-[#FFE45A] bg-[#29183E] text-center text-white">
         <p className="text-[#42C9FF] font-bold">{role==='team'?`جهاز ${session.teams[teamIndex]?.name}`:host?'شاشة الحكم':'شاشة الجمهور'}</p>
         <h1 className="text-3xl font-black">{terminal?(v.stage==='cancelled'?'أُلغيت المباراة':leader===null?'تعادل!':`يا سلام! ${session.teams[leader].name} فازوا`):v.sectionTitle}</h1>
-        {!host&&<p>{v.rules}</p>}{host&&<details className="text-sm"><summary className="cursor-pointer">قانون الجولة</summary><p>{v.rules}</p></details>}
-        {!terminal&&<>{(v.deadline!==null||v.paused)&&<div className={`text-6xl font-black tabular-nums ${remaining<=5&&isLive?'text-[#FF68A0]':'text-[#FFE45A]'}`} aria-label="الوقت المتبقي">{remaining}</div>}
+        {!host&&role!=='audience'&&<p>{v.rules}</p>}{host&&<details className="text-sm"><summary className="cursor-pointer">قانون الجولة</summary><p>{v.rules}</p></details>}
+        {!terminal&&<>{role!=='audience'&&(v.deadline!==null||v.paused)&&<div className={`text-6xl font-black tabular-nums ${remaining<=5&&isLive?'text-[#FF68A0]':'text-[#FFE45A]'}`} aria-label="الوقت المتبقي">{remaining}</div>}
           <p>{v.paused?'الوقت متوقف':v.stage==='reading'?'اقرأ السؤال، وبعدين افتح التحدي':v.stage==='bidding'?`الدور بالمزايدة: ${session.teams[v.bidTurn].name}`:v.stage==='auction_ready'?`بانتظار جاهزية ${session.teams[v.bidder].name}`:v.team!==null?`الدور: ${session.teams[v.team].name}`:v.stage==='buzz_open'?'الجرس مفتوح!':v.stage==='judging'?'المقدم بحكّم الإجابة':v.stage==='result'?'انتهى التحدي':v.stage==='ready'?'الفريقان جاهزين؟':'يلا نشوف شطارتكم!'}</p></>}
         {v.notice&&<p role="status" className="text-[#FFE45A]">{v.notice}</p>}
         </section>
