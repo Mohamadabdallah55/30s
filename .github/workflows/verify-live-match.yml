@@ -1,0 +1,19 @@
+name: Verify live match
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bunx tsx --test src/server/challengeV2/engine.test.ts src/server/challengeV2/integration.test.ts src/server/gameShow.test.ts src/server/lessonStudio2.test.ts
