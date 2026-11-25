@@ -92,6 +92,16 @@ export function applyEventV2(s: StateV2, e: EventV2, actor: {host:boolean;team?:
   const need: (valid: unknown, message?: string) => asserts valid = (valid, message='الإجراء غير متاح في المرحلة الحالية.') => {if(!valid)throw new Error(message);};
   const slot=currentSlotV2(n), q=currentQuestionV2(n);
   const active=()=>need(!c.paused&&c.stage==='answering'&&c.deadline!==null&&now<c.deadline,'انتهى وقت تقديم الإجابات أو لم يبدأ.');
+  if(e.action==='judge_spoken') {
+    need(actor.host&&typeof e.correct==='boolean','التحكيم الشفهي للمقدم فقط.');
+    const submitted=applyEventV2(n,{...e,id:uid(),action:'submit'},actor,now);
+    const attempt=submitted.core.attempts.at(-1)!;
+    const judged=applyEventV2(submitted,{id:uid(),revision:submitted.revision,turnId:submitted.core.turnId,
+      questionInstanceId:submitted.core.questionInstanceId,action:e.correct?'mark_correct':'mark_wrong',attemptId:attempt.id},actor,now);
+    // A spoken judgment is one transaction and one undo, with no intermediate public state.
+    judged.undo=submitted.undo;judged.revision=n.revision+1;judged.receipts=[...n.receipts,e.id];
+    return judged;
+  }
   if(e.action==='undo') {
     need(actor.host&&n.undo.length,'لا توجد عملية قابلة للتراجع.');
     const previous=n.undo.pop()!;
