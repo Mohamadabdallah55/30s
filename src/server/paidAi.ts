@@ -7,7 +7,7 @@ export const PAID_MODEL = 'gpt-6-luna';
 export type BudgetKind = 'pdf' | 'chat';
 export type Part = {type:'input_text';text:string} | {type:'input_image';image_url:string;detail:'low'} | {type:'input_file';filename:string;file_data:string;detail:'low'};
 export type Message = {role:'user'|'assistant';content:Part[]};
-export const LIMITS = {pdf:4500000,chat:500000}; // microdollars
+export const LIMITS = {pdf:4000000,chat:1000000}; // microdollars
 let ledger: Database.Database | undefined;
 export function paidMode() { return process.env.YAZAN_PAID_AI_MODE === 'openai'; }
 function database() {

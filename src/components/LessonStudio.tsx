@@ -148,9 +148,9 @@ export function LessonStudio({
     'who_am_i',
     'list_multiple',
   ]);
-  const [generationMode, setGenerationMode] = useState<LessonGenerationMode>('custom');
+  const [generationMode, setGenerationMode] = useState<LessonGenerationMode>('suggested');
   const [distributionMode, setDistributionMode] = useState<LessonDistributionMode>('ai');
-  const [customCount, setCustomCount] = useState<number>(12);
+  const [customCount, setCustomCount] = useState<number>(15);
   const [reestimating, setReestimating] = useState(false);
   const [startingGeneration, setStartingGeneration] = useState(false);
 
@@ -228,12 +228,11 @@ export function LessonStudio({
 
   const syncReportDefaultsFromLesson = (lesson: LessonBatchSummary) => {
     if (lesson.generationMode) setGenerationMode(lesson.generationMode);
-    else setGenerationMode('custom');
     if (lesson.distributionMode) setDistributionMode(lesson.distributionMode);
     if (lesson.generationPlanPreview?.targetCount) {
       setCustomCount(lesson.generationPlanPreview.targetCount);
     } else if (lesson.capacityEstimate?.suggestedCount) {
-      setCustomCount(Math.min(12, lesson.capacityEstimate.suggestedCount));
+      setCustomCount(lesson.capacityEstimate.suggestedCount);
     }
     if (lesson.generationPlanPreview?.selectedRoundTypes?.length) {
       setSelectedRounds(lesson.generationPlanPreview.selectedRoundTypes);
