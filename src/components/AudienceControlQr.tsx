@@ -1,6 +1,7 @@
+import { memo } from 'react';
 import { SessionQrBadge } from './BrandEmblem';
 
-export function AudienceControlQr({code,onOpenHost}:{code:string;onOpenHost?:()=>void}) {
+export const AudienceControlQr = memo(function AudienceControlQr({code,onOpenHost}:{code:string;onOpenHost?:()=>void}) {
   const url=`${window.location.origin}/?mode=host&code=${encodeURIComponent(code)}`;
   return <section className="audience-control-qr" aria-label="ربط هاتف الحكم">
     <SessionQrBadge code={code} url={url} size="md"/>
@@ -8,4 +9,4 @@ export function AudienceControlQr({code,onOpenHost}:{code:string;onOpenHost?:()=
     <small>امسح الرمز وسجّل الدخول بحساب المشرف</small>
     {onOpenHost&&<button type="button" className="show-button show-button--cream" onClick={onOpenHost}>تحكم من هون</button>}
   </section>;
-}
+});
