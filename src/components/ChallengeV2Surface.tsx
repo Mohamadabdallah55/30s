@@ -5,10 +5,11 @@ import { apiFetch } from '../utils/api';
 import { ShowMark } from './ShowArt';
 import { soundFx } from '../utils/sound';
 import { SessionQrBadge } from './BrandEmblem';
+import { AudienceControlQr } from './AudienceControlQr';
 
-export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit}: {
+export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit, onOpenHost}: {
   session:GameSessionView; role:'host'|'audience'|'team'; teamIndex?:number;
-  onUpdate?:(s:GameSessionView)=>void; onExit:()=>void;
+  onUpdate?:(s:GameSessionView)=>void; onExit:()=>void; onOpenHost?:()=>void;
 }) {
   const v=session.challengeV2!;
   const host=role==='host'&&Boolean(session.hostSecret);
@@ -57,7 +58,7 @@ export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit
   const eligibleTeams=session.teams.filter(t=>v.section==='identity'?!v.guessed.includes(t.index):v.team===t.index);
   const terminal=['finished','cancelled'].includes(v.stage);
   const leader=session.teams[0].points===session.teams[1].points?null:session.teams[0].points>session.teams[1].points?0:1;
-  return <div className="show-stage v2-live-stage" dir="rtl" data-phase={session.phase} data-role={role}>
+  return <div className={`show-stage v2-live-stage ${role==='audience'?'audience-wide-stage':''}`} dir="rtl" data-phase={session.phase} data-role={role}>
     <header className="show-stage__head"><ShowMark/><span>تحدي الثلاثين · <bdi>#{session.code}</bdi></span><button type="button" onClick={onExit} className="show-button show-button--cream">رجوع</button></header>
     <main className="v2-live-layout">
       <aside className="v2-live-rail" aria-label="النتائج والوقت">
@@ -71,9 +72,12 @@ export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit
         {v.notice&&<p role="status" className="text-[#FFE45A]">{v.notice}</p>}
         </section>
         <div className="v2-live-progress" aria-label="فقرات المباراة">{v.plan.map(item=><span key={item.section} data-current={v.section===item.section}>{item.title}</span>)}</div>
+        {role==='audience'&&!terminal&&<AudienceControlQr code={session.code} onOpenHost={onOpenHost}/>}
         {host&&<a target="_blank" rel="noopener noreferrer" href={`/?mode=projector&code=${encodeURIComponent(session.code)}`} className="show-button show-button--cream">عرض الجمهور (اختياري)</a>}
       </aside>
       <div className="v2-live-body">
+      {role==='audience'&&v.stage==='ready'&&<section className="audience-ready"><p>تحدي الثلاثين</p><h2>جاهزين للمواجهة؟</h2><div className="audience-ready-teams">{session.teams.map(t=><strong key={t.index} style={{borderColor:t.color}}>{t.name}</strong>)}</div><p>بانتظار بدء المباراة من الحكم</p></section>}
+      {role==='audience'&&terminal&&<section className="audience-ready"><p>النتيجة النهائية</p><h2>{v.stage==='cancelled'?'أُلغيت المباراة':leader===null?'تعادل!':session.teams[leader].name+' فازوا!'}</h2><div className="audience-ready-teams">{session.teams.map(t=><strong key={t.index} style={{borderColor:t.color}}>{t.name} · {t.points}</strong>)}</div></section>}
       {v.stage!=='ready'&&!terminal&&<section className="v2-live-question rounded-3xl bg-[#FFF9ED] text-[#29183E] text-center">
         <h2 className="text-2xl sm:text-4xl font-black">{session.currentQuestion?.prompt}</h2>
         {session.currentQuestion?.revealedClues?.map((clue,i)=><p className="rounded-2xl bg-[#874CF5]/15 p-3 text-xl" key={i}>التلميح {i+1}: {clue}</p>)}
