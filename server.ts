@@ -3,6 +3,7 @@ import express from 'express';
 import http from 'node:http';
 import path from 'node:path';
 import { createAppAndHub } from './src/server/appFactory';
+import { checkBudgetStorage } from './src/server/paidAi';
 import { createDatabase } from './src/server/db';
 import { seedDatabase } from './src/server/seed';
 import { importGeminiBank } from './src/server/importGeminiBank';
@@ -59,6 +60,12 @@ async function startServer() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`T30 Mosque Challenge server listening on http://localhost:${PORT}`);
+    if (process.env.YAZAN_SUPABASE_URL && process.env.YAZAN_SUPABASE_SECRET_KEY) {
+      void checkBudgetStorage().then(
+        () => console.log('Yazan budget storage: connected'),
+        () => console.warn('Yazan budget storage: unavailable; paid requests remain blocked')
+      );
+    }
   });
 }
 
