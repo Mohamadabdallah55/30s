@@ -31,7 +31,7 @@ function rotateKnowledge(s:StateV2,team:number,correct:boolean,now:number,pass=f
   if(!correct&&!pass){
     const key=strikeKey(slot,team);
     c.counts[key]=(c.counts[key]??0)+1;
-    if(c.counts[key]>=3){awardV2(c,slot,team,-1,'ثلاثة أخطاء في ماذا تعرف');closeV2(c);return;}
+    if(c.counts[key]>=3){awardV2(c,slot,1-team,1,'الفوز بماذا تعرف بعد ثلاثة أخطاء للخصم');c.notice='ثلاثة أخطاء — نقطة للفريق المنافس';closeV2(c);return;}
   }
   if(!q.acceptsOtherAnswers&&c.accepted.length>=new Set(q.acceptableAnswers.map(normalizeChallengeItem)).size){closeV2(c);return;}
   c.team=1-team;c.turnId=uid();c.stage='answering';turnClock(c,now,7000,'answer');
@@ -170,6 +170,7 @@ export function applyEventV2(s: StateV2, e: EventV2, actor: {host:boolean;team?:
               c.accepted.push(item);
             }
           }
+          if(slot.section==='auction'&&!correct){awardV2(c,slot,1-c.bidder,1,'إجابة خاطئة في المزاد');c.notice='إجابة خاطئة — نقطة للفريق المنافس';closeV2(c);break;}
           if(sharedKnowledge(slot)) {rotateKnowledge(n,a!.team,correct,now);break;}
           if(slot.section==='knowledge'&&q.roundType==='rapid_fire'&&c.stage==='answering') {
             if(c.questionIndex+1<slot.questions.length){c.questionIndex++;c.questionInstanceId=uid();c.shown.push(currentQuestionV2(n).id);}
