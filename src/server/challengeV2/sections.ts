@@ -20,7 +20,7 @@ export function settleKnowledge(c: CoreV2, slot: SlotV2, plan: SlotV2[]) {
 }
 export function settleAuction(c: CoreV2, slot: SlotV2) {
   const won = c.accepted.length >= c.bid;
-  awardV2(c, slot, won ? c.bidder : 1-c.bidder, won ? 3 : 2, won ? 'نجاح المزايدة' : 'فشل المزايدة');
+  awardV2(c, slot, won ? c.bidder : 1-c.bidder, won ? 3 : 1, won ? 'نجاح المزايدة' : 'فشل المزايدة');
 }
 export function turnClock(c: CoreV2, now: number, ms: number, kind: CoreV2['timerKind']) {
   c.remainingMs = ms; c.deadline = now + ms; c.timerKind = kind; c.paused = false;
