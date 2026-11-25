@@ -34,28 +34,9 @@ export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit
       apiFetch<{session:GameSessionView}>(`/api/sessions/${session.code}?role=${host?'host':'player'}`).then(r=>onUpdate?.(r.session)).catch(()=>{});
     }finally{busyRef.current=false;setBusy(false);}
   };
-  // Verbal judging uses the same authoritative submit/mark pipeline as phones.
-  // Use the returned revision and attempt ID, never a stale local snapshot.
-  const judgeSpoken=async(team:number,answer:string,correct:boolean)=>{
-    if(!host||busyRef.current||!answer.trim())return;
-    busyRef.current=true;setBusy(true);setError('');
-    try{
-      const send=(state:GameSessionView,action:ActionV2,extra:Partial<EventV2>)=>{
-        const current=state.challengeV2!;
-        return apiFetch<{session:GameSessionView}>(`/api/sessions/${state.code}/v2/event`,{
-          method:'POST',body:JSON.stringify({id:crypto.randomUUID(),revision:current.revision,turnId:current.turnId,questionInstanceId:current.questionInstanceId,action,...extra})
-        });
-      };
-      const first=await send(session,'submit',{team,text:answer.trim()});
-      onUpdate?.(first.session);
-      const attempt=first.session.challengeV2?.host?.attempts.find(a=>a.correct===null&&a.team===team);
-      if(!attempt)throw new Error('لم نجد المحاولة المسجلة؛ راجع سجل الحكم.');
-      const final=await send(first.session,correct?'mark_correct':'mark_wrong',{attemptId:attempt.id});
-      onUpdate?.(final.session);setText('');
-    }catch(e){
-      setError(e instanceof Error?e.message:'تعذر التحكيم');
-      apiFetch<{session:GameSessionView}>(`/api/sessions/${session.code}?role=host`).then(r=>onUpdate?.(r.session)).catch(()=>{});
-    }finally{busyRef.current=false;setBusy(false);}
+  const judgeSpoken=(team:number,answer:string,correct:boolean)=>{
+    if(!host||!answer.trim())return;
+    return act('judge_spoken',{team,text:answer.trim(),correct});
   };
   const pending=v.host?.attempts.find(a=>a.correct===null);
   useEffect(()=>{
@@ -100,8 +81,8 @@ export function ChallengeV2Surface({session, role, teamIndex=0, onUpdate, onExit
         {v.section==='knowledge'&&<p className="text-3xl font-black">{v.acceptedCount} إجابة صحيحة</p>}
         {session.answerRevealed&&session.currentQuestion?.revealedAcceptableAnswers&&<p className="v2-live-revealed">{session.currentQuestion.revealedAcceptableAnswers.join(' · ')}</p>}
         {host&&!session.answerRevealed&&<button type="button" aria-expanded={showAnswer} className="show-button show-button--yellow v2-live-reveal" onClick={()=>setShowAnswer(value=>!value)}>{showAnswer?'إخفاء الإجابة':'كشف الإجابة'}</button>}
-        {host&&showAnswer&&!session.answerRevealed&&!listMode&&<div className="v2-live-revealed"><small>الإجابة الصحيحة</small><strong>{canonicalAnswers.join(' · ')||'—'}</strong>{session.hostSecret?.explanation&&<p>{session.hostSecret.explanation}</p>}</div>}
-        {host&&showAnswer&&listMode&&<p>قائمة الإجابات أسفل السؤال؛ اضغط على الاسم لاحتسابه.</p>}
+        {host&&(showAnswer||session.answerRevealed)&&!listMode&&<div className="v2-live-revealed"><small>الإجابة الصحيحة</small><strong>{canonicalAnswers.join(' · ')||'—'}</strong>{session.hostSecret?.explanation&&<p>{session.hostSecret.explanation}</p>}</div>}
+        {host&&showAnswer&&listMode&&!session.answerRevealed&&<p>قائمة الإجابات أسفل السؤال؛ اضغط على الاسم لاحتسابه.</p>}{host&&session.answerRevealed&&listMode&&<div className="v2-live-revealed"><small>الإجابات المعتمدة</small><strong>{canonicalAnswers.join(' · ')}</strong></div>}
       </section>}
       {error&&<p role="alert" className="rounded-xl bg-rose-900 p-3 text-white">{error}</p>}
       {host&&!terminal&&<section className="v2-live-controls rounded-2xl bg-[#29183E] text-white">
