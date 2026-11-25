@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: horouf-static-preview
+    runtime: static
+    repo: https://github.com/Mohamadabdallah55/horouf
+    branch: main
+    buildCommand: bun install --frozen-lockfile && bun run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://horouf-1.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
+  - type: web
+    name: codenames-static-preview
+    runtime: static
+    repo: https://github.com/Mohamadabdallah55/codenames
+    branch: main
+    buildCommand: bun install && bun run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://codenames-1-hpmp.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
+  - type: web
+    name: family-static-preview
+    runtime: static
+    repo: https://github.com/Mohamadabdallah55/family
+    branch: main
+    buildCommand: bun install --frozen-lockfile && bun run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://family-gdyz.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
+  - type: web
+    name: moo-static-preview
+    runtime: static
+    repo: https://github.com/Mohamadabdallah55/moo
+    branch: main
+    buildCommand: bun install && bun run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://moo-vvsx.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
