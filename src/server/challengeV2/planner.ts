@@ -70,7 +70,7 @@ export function prepareMatchV2(db: Database.Database, filters: Omit<SelectionReq
       slot(section, i, null, points, [take(q)]);
     }
   };
-  paired('knowledge', 0, 3); paired('knowledge', 1, 3);
+  shared('knowledge', 2, 1, q => q.roundType === 'list_multiple' && q.acceptableAnswers.length >= 3 && !q.unsuitableForTimed);
   shared('auction', 2, 3, q => q.roundType === 'bid_challenge' && (q.bidMaximum ?? 0) > (q.bidMinimum ?? 1));
   shared('buzzer', 6, 2, plain);
   shared('identity', 2, 3, q => q.roundType === 'who_am_i' && q.clues.length >= 3);
